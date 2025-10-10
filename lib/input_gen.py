@@ -16,3 +16,19 @@ class Normal(Xs_Generator):
     def _generate(self, rng, n_patterns: int):
         x = jax.random.normal(rng, (n_patterns, self.nd, self.ns))
         return x
+    
+class Normal_random_scaled(Xs_Generator):
+    def __init__(self, nd: int, ns: int, rng: jax.Array):
+        super().__init__()
+        self.nd = nd
+        self.ns = ns
+        self.scale_mat = jax.random.normal(rng, (nd, ns))
+        self.scale_mat = self.scale_mat / jnp.linalg.norm(self.scale_mat, axis=-1, ord=2, keepdims=True) * jnp.sqrt(ns)
+        self.scale_mat = jnp.abs(self.scale_mat)
+
+    @partial(jax.jit, static_argnames=('self', 'n_patterns'))
+    def _generate(self, rng, n_patterns: int):
+        rng1, rng2 = jax.random.split(rng)
+        x = jax.random.normal(rng1, (n_patterns, self.nd, self.ns))
+        x = x * self.scale_mat[None, :, :]
+        return x
