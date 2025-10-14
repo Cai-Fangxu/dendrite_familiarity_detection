@@ -90,25 +90,25 @@ class HyperConfig2:
     b: float # threshold for dendritic nonlinearity
     bk: float # target dendritic activation
     beta: float # weight decay rate
-    gamma: float # decay factor for frequency estimation, recommended value: 1-f/k = 1- f/2, where f is the dendrite's expected update frequency, then <freq>^2 / Var[freq] is roughly 2k.
-
-    delta_th: float # if freq is outside [f-delta_th, f+delta_th], then shift is updated. recommended value: delta_th=2*sqrt(var(freq)) = 2*sqrt(f(1-f)(1-gamma)/(1+gamma))
-    delta: float # the step size of shift update
+    age_max: int # maximum age for each dendrite, when max is reached, the age is set back to 0. 
+    gamma: float # decay rate for var(w*x) estimation
+    shift: float # dendritic threshold b and bk are shited by shift*sqrt(var(w*x))
 
 @dataclass
 class HyperDynConfig2:
     b: float # threshold for dendritic nonlinearity
     bk: float # target dendritic activation
     beta: float # weight decay rate
-    gamma: float # decay factor for frequency estimation, recommended value: 1-f/k = 1- f/2, where f is the dendrite's expected update frequency, then <freq>^2 / Var[freq] is roughly 2k.
-    delta_th: float # if freq is outside [f-delta_th, f+delta_th], then shift is updated. recommended value: delta_th=2*sqrt(var(freq)) = 2*sqrt(f(1-f)(1-gamma)/(1+gamma))
-    delta: float # the step size of shift update
+    age_max: int # maximum age for each dendrite, when max is reached, the age is set back to 0
+    gamma: float # decay rate for var(w*x) estimation
+    shift: float # dendritic threshold b and bk are shited by shift*sqrt(var(w*x))
+
 
 @dataclass
 class State2:
     w: jnp.ndarray # shape (nd, ns)
-    shift: jnp.ndarray # shape (nd,), additional shift applied to w*x
-    freq: jnp.ndarray # shape (nd,), estimated frequency of updates for each dendrite
+    wx2: jnp.ndarray # shape (nd,), running estimate of E[(w*x)^2] for each dendrite
+    age: jnp.ndarray # shape (nd,), number of updates since the last time the dendrite is selected
 
 class Neuron_Decay_Int2(Neuron[HyperConfig2, State2, HyperDynConfig2]): 
     def __init__(self, hyperparameters: HyperConfig2):
@@ -117,42 +117,42 @@ class Neuron_Decay_Int2(Neuron[HyperConfig2, State2, HyperDynConfig2]):
     @partial(jax.jit, static_argnames=('self',))
     def init_state(self, rng, hyperD: HyperDynConfig2): 
         w = jax.random.normal(rng, (self.hyper.nd, self.hyper.ns)) / jnp.sqrt(self.hyper.ns)
-        shift = jnp.zeros(self.hyper.nd)
-        freq = jnp.ones(self.hyper.nd) * (self.hyper.n / self.hyper.nd) # initial frequency estimate
-        return State2(w=w, shift=shift, freq=freq)
+        wx2 = jnp.ones(self.hyper.nd, dtype=jnp.float32) # initial estimate of E[(w*x)^2]
+        age = jnp.full((self.hyper.nd,), hyperD.age_max, dtype=jnp.int32) # set initial age to age_max, so that all dendrites can be selected at the first update
+        return State2(w=w, wx2=wx2, age=age)
 
     @partial(jax.jit, static_argnames=('self',))
     def _forward(self, hyperD: HyperDynConfig2, state: State2, x: jnp.ndarray): # x: (B, nd, ns)
         w = state.w # (nd, ns)
-        shift = state.shift # (nd,)
+        wx2 = state.wx2 # (nd,)
+        th_shift = hyperD.shift * jnp.sqrt(wx2) # (nd,)
         u = jnp.sum(w * x, axis=-1) # (B, nd)
-        z = jax.nn.relu(u - hyperD.b - shift) # (B, nd)
+        z = jax.nn.relu(u - hyperD.b - th_shift) # (B, nd)
         y = jnp.sum(z, axis=-1) # (B,)
         return y
     
     @partial(jax.jit, static_argnames=('self',))
     def _update(self, hyperD: HyperDynConfig2, state: State2, x: jnp.ndarray): # x: (nd, ns)
-        w, shift, freq = state.w, state.shift, state.freq # (nd, ns), (nd,), (nd,)
+        w, wx2, age = state.w, state.wx2, state.age # (nd, ns), (nd,), (nd,)
         ns, nd, n = self.hyper.ns, self.hyper.nd, self.hyper.n
-        beta, bk, gamma, delta_th, delta = hyperD.beta, hyperD.bk, hyperD.gamma, hyperD.delta_th, hyperD.delta
+        beta, bk, age_max, gamma, shift = hyperD.beta, hyperD.bk, hyperD.age_max, hyperD.gamma, hyperD.shift
 
-        f_exp = n/nd
-        shift_updateQ = jnp.abs(freq-f_exp) > delta_th
-        shift += shift_updateQ * jnp.sign(freq-f_exp) * delta
-        shift = shift - jnp.mean(shift) # keep mean(shift)=0
-
+        th_shift = shift * jnp.sqrt(wx2) # (nd,)
         overlaps = jnp.sum(w*x, axis=-1) # (nd, )
-        _, updated_idx = jax.lax.top_k(overlaps-shift, n)
+        overlaps_tmp = overlaps - (age!=age_max)*1e3 # if age != age_max, set overlaps to a very small value, so that it won't be selected
+        _, updated_idx = jax.lax.top_k(overlaps_tmp-th_shift, n)
         updated_overlap = overlaps[updated_idx] # (n, )
-        updated_shift = shift[updated_idx] # (n, )
+        updated_shift = th_shift[updated_idx] # (n, )
         x_len_updated2 = jnp.linalg.norm(x[updated_idx], axis=-1, ord=2, keepdims=True)**2
         updated_w = w[updated_idx] + jnp.heaviside(bk+updated_shift-updated_overlap, 0.)[:, None] * ( x[updated_idx]/x_len_updated2*(bk+updated_shift-(1-beta/ns)*updated_overlap)[:, None]- beta/ns*w[updated_idx] ) # dim = (n, ns)
+        updated_w = jnp.clip(updated_w, -3./jnp.sqrt(ns), 3./jnp.sqrt(ns)) # clip weights to avoid numerical issues
         w = w.at[updated_idx].set(updated_w)
 
-        freq = freq * gamma
-        freq = freq.at[updated_idx].add(1-gamma)
-
-        new_state = State2(w=w, shift=shift, freq=freq)
-        return new_state
+        # update age
+        age = jnp.minimum(age+1, age_max)
+        age = age.at[updated_idx].set(0)
+        # update wx2
+        wx2 = gamma*wx2 + (1-gamma)*(overlaps**2)
+        return State2(w=w, wx2=wx2, age=age)
 
 # endregion neurontype2

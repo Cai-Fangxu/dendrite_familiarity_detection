@@ -325,9 +325,10 @@ class Driver2_bScan:
         """ Run simulation for `resample_every` steps and record the outputs"""
         def step_fn(carry, x): # carry = state
             new_carry = self.neuron.update(hyperD, carry, x)
-            w, shift = new_carry.w, new_carry.shift # (nd, ns), (nd,)
+            w, wx2 = new_carry.w, new_carry.wx2 # (nd, ns), (nd,)
+            th_shift = hyperD.shift * jnp.sqrt(wx2) # (nd,)
             us = jnp.sum(x0s * w, axis=-1) # (n_tested_patterns, nd)
-            z = jax.nn.relu(us[None, :, :] - bs[:, None, None] - shift[None, None, :]) # (bs_size, n_tested_patterns, nd)
+            z = jax.nn.relu(us[None, :, :] - bs[:, None, None] - th_shift[None, None, :]) # (bs_size, n_tested_patterns, nd)
             y = jnp.sum(z, axis=-1) # (bs_size, n_tested_patterns)
             return new_carry, y
         new_state, ys = jax.lax.scan(step_fn, state, xs) # ys: (resample_every, bs_size, n_tested_patterns)
@@ -339,9 +340,10 @@ class Driver2_bScan:
         bs_size = bs.shape[0]
         def step_fn1(state, x): # carry = state
             new_state = self.neuron.update(hyperD, state, x)
-            w, shift = new_state.w, new_state.shift # (nd, ns), (nd,)
+            w, wx2 = new_state.w, new_state.wx2 # (nd, ns), (nd,)
+            th_shift = hyperD.shift * jnp.sqrt(wx2) # (nd,)
             us = jnp.sum(x0s * w, axis=-1) # (n_tested_patterns, nd)
-            z = jax.nn.relu(us[None, :, :] - bs[:, None, None] - shift[None, None, :]) # (bs_size, n_tested_patterns, nd)
+            z = jax.nn.relu(us[None, :, :] - bs[:, None, None] - th_shift[None, None, :]) # (bs_size, n_tested_patterns, nd)
             y = jnp.sum(z, axis=-1) # (bs_size, n_tested_patterns)
             return new_state, y
         def step_fn2(state, x): # carry = state
@@ -453,7 +455,7 @@ class Driver2_bScan:
         self.steady_record = self.steady_record[~mask] # (n_recorded_steps, bs_size, n_tested_patterns)
 
 
-class Driver2_shift_freq_record:
+class Driver2_age_wx2_record:
     def __init__(
             self, 
             neuron: Neuron[HyperConfig2, State2, HyperDynConfig2], 
@@ -469,14 +471,14 @@ class Driver2_shift_freq_record:
         self.hyperD = hyperD
         self.state = initial_state
         self.resample_every = resample_every
-        self.freq_record = None
-        self.shift_record = None
+        self.age_record = None
+        self.wx2_record = None
 
     def _update_record(self, hyperD: HyperDynConfig2, state: State2, xs: jax.Array): # xs: (resample_every, nd, ns)
         """ Update the state by xs without recording the outputs"""
         def step_fn(carry, x): # carry = state
             new_carry = self.neuron.update(hyperD, carry, x)
-            return new_carry, (new_carry.freq, new_carry.shift)
+            return new_carry, (new_carry.age, new_carry.wx2)
         new_state, records = jax.lax.scan(step_fn, state, xs)
         return new_state, records # records: ((resample_every, nd), (resample_every, nd))
     
@@ -501,7 +503,7 @@ class Driver2_shift_freq_record:
 
         self.rng, rng1 = jax.random.split(self.rng, 2)
         self.state, records = self.update_record(rng1, self.hyperD, self.state, n_steps)
-        self.freq_record = np.array(records[0].reshape(-1, records[0].shape[-1])) # (n_steps, nd)
-        self.shift_record = np.array(records[1].reshape(-1, records[1].shape[-1])) # (n_steps, nd)
+        self.age_record = np.array(records[0].reshape(-1, records[0].shape[-1])) # (n_steps, nd)
+        self.wx2_record = np.array(records[1].reshape(-1, records[1].shape[-1])) # (n_steps, nd)
 
 # endregion drivers-for-Type2-neurons
