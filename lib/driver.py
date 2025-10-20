@@ -32,6 +32,14 @@ class Driver1_bScan:
         self.transient_record = None
         self.steady_record = None
 
+    def re_init(self, rng: jax.Array, hyperD: HyperDynConfig1=None, initial_state: State1 = None):
+        """reset the driver without triggering recompilation"""
+        self.state = initial_state
+        self.rng = rng
+        self.hyperD = hyperD
+        self.transient_record = None
+        self.steady_record = None
+
     def _update_no_record(self, hyperD: HyperDynConfig1, state: State1, xs: jax.Array): # xs: (resample_every, nd, ns)
         """ Update the state by xs without recording the outputs"""
         def step_fn(carry, x): # carry = state
