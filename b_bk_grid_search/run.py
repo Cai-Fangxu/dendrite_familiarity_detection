@@ -2,6 +2,10 @@
 Grid search for hyperparameters b and bk
 """
 
+import sys
+sys.path.insert(0, '..')
+
+
 import os
 import numpy as np
 import jax
@@ -9,7 +13,7 @@ import jax.numpy as jnp
 
 from lib import neurons, input_gen, driver, utils
 
-tmp_data_folder = "tmp_data/"
+tmp_data_folder = "../tmp_data/"
 n_repeat = 6
 
 bs_size = 13
