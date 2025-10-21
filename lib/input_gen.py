@@ -54,3 +54,27 @@ class Normal_Corr_across_Dendrites(Xs_Generator):
     def _generate(self, rng, n_patterns: int):
         axon_inputs = jax.random.normal(rng, (n_patterns, self.nA))
         return axon_inputs[:, self.conn_idx_mat]
+    
+class Sparse_Binomial(Xs_Generator):
+    def __init__(self, nd, ns, fA=0.1, mu=4, n_burst=4, key=jax.random.PRNGKey(0)):
+        """n_burst: the maximum number of spikes in a burst
+        mu: the expected number of spikes in a burst
+        fA: the sparsity of the input signal
+        rescale: rescale each element so that it has unit variance"""
+        super().__init__()
+        self.nd = nd
+        self.ns = ns
+        self.fA = fA
+        self.mu = mu
+        self.n_burst = n_burst
+        self.key = key
+        self.rescale_factor = 1/jnp.sqrt(fA*(mu*(1-mu/n_burst) + mu*mu*(1-fA)))
+
+    @partial(jax.jit, static_argnames=('self', 'n_patterns'))
+    def _generate(self, rng, n_patterns: int):
+        key1, key2 = jax.random.split(rng)
+        xs1 = jax.random.choice(key1, jnp.array([0., 1.]), (n_patterns, self.nd, self.ns), p=jnp.array([1-self.fA, self.fA]))
+        xs2 = jax.random.binomial(key2, self.n_burst, self.mu/self.n_burst, (n_patterns, self.nd, self.ns))
+        xs = xs1*xs2 - self.fA*self.mu
+        xs = xs*self.rescale_factor
+        return xs

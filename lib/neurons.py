@@ -26,6 +26,11 @@ class HyperDynConfig1:
     beta: float # weight decay rate
 
 @dataclass
+class HyperDynConfig1_SynapticBound(HyperDynConfig1):
+    reset_from: float # if the absolute weight exceeds this value, it is reset to reset_to
+    reset_to: float # the value to which the weight is reset if it exceeds reset_from
+
+@dataclass
 class State1:
     w: jnp.ndarray # shape (nd, ns)
 
@@ -72,6 +77,26 @@ class Neuron_Decay_NonInt(Neuron_Decay_Int):
         overlaps = jnp.sum(w*x, axis=-1) # dim = (nd, )
         mask = jnp.heaviside(bk-overlaps, 0)*jnp.heaviside(overlaps-bla, 0.) # dim = (nd, )
         w = w + mask[:, None] * ( x/x_len2*(bk-(1-beta/ns)*overlaps)[:, None] - beta/ns*w ) # dim = (nd, ns)
+        new_state = State1(w=w)
+        return new_state
+
+
+class Neuron_Decay_Int_SynapticBound(Neuron_Decay_Int):
+    def __init__(self, hyperparameters: HyperConfig1):
+        super().__init__(hyperparameters)
+
+    @partial(jax.jit, static_argnames=('self',))
+    def _update(self, hyperD: HyperDynConfig1_SynapticBound, state: State1, x: jnp.ndarray): # x: (nd, ns)
+        w = state.w # (nd, ns)
+        ns, n = self.hyper.ns, self.hyper.n
+        beta, bk, reset_from, reset_to = hyperD.beta, hyperD.bk, hyperD.reset_from, hyperD.reset_to
+        reset_from, reset_to = reset_from/jnp.sqrt(ns), reset_to/jnp.sqrt(ns)
+        overlaps = jnp.sum(w*x, axis=-1) # dim = (nd, )
+        updated_overlap, updated_idx = jax.lax.top_k(overlaps, n)
+        x_len_updated2 = jnp.linalg.norm(x[updated_idx], axis=-1, ord=2, keepdims=True)**2
+        updated_w = w[updated_idx] + jnp.heaviside(bk-updated_overlap, 0.)[:, None] * ( x[updated_idx]/x_len_updated2*(bk-(1-beta/ns)*updated_overlap)[:, None]- beta/ns*w[updated_idx] ) # dim = (n, ns)
+        updated_w = jnp.where(jnp.abs(updated_w) > reset_from, reset_to*jnp.sign(updated_w), updated_w)
+        w = w.at[updated_idx].set(updated_w)
         new_state = State1(w=w)
         return new_state
 
