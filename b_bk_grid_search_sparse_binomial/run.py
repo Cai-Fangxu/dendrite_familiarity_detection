@@ -7,6 +7,7 @@ sys.path.insert(0, '..')
 
 
 import os
+import gc
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -23,7 +24,7 @@ params_list = np.genfromtxt(f"{tmp_data_folder}params_list_tmp.csv", delimiter='
 n_lines = params_list.shape[0]
 
 old_nd, old_n = 0, 0
-for line_idx in range(n_lines):
+for line_idx in range(145, n_lines):
     tmp = params_list[line_idx]
     nd, ns, bk, bias_center, n, beta, seed = tmp
     seed = int(seed)
@@ -46,7 +47,7 @@ for line_idx in range(n_lines):
         neuron = neurons.Neuron_Decay_Int_SynapticBound(hyperparameters=hyper)
         # xs_gen = input_gen.Normal(nd=nd, ns=ns)
         subkey, subkey2 = jax.random.split(subkey)
-        xs_gen = input_gen.Sparse_Binomial(nd=nd, ns=ns, fA=0.15, mu=4, n_burst=4, key=subkey2)
+        xs_gen = input_gen.Sparse_Binomial(nd=nd, ns=ns, fA=0.20, mu=4, n_burst=4, key=subkey2)
         my_driver = driver.Driver1_bScan(neuron=neuron, xs_generator=xs_gen, rng=subkey, hyperD=hyperD, initial_state=None, resample_every=1000, n_tested_patterns=1000)
     else:
         hyperD = neurons.HyperDynConfig1_SynapticBound(b=bias_center, bk=bk, beta=beta, reset_from=3.0, reset_to=3.0)
@@ -77,3 +78,14 @@ for line_idx in range(n_lines):
     os.makedirs(folder_path, exist_ok=True)
     with open(f"{folder_path}n{n}.csv", 'a') as f:
         np.savetxt(f, tmp_data, delimiter=',', fmt=['%.3f', '%.3f', '%.6f']+['%.2f' for _ in range(n_repeat)])
+
+    
+    # Clear memory after each iteration
+    my_driver.transient_record = None
+    my_driver.steady_record = None
+    del tmp_data, capa_list, capas
+    gc.collect()
+    
+    # Periodically clear JAX cache to prevent compilation cache buildup
+    if (line_idx + 1) % 20 == 0:
+        jax.clear_caches()
