@@ -49,7 +49,7 @@ for line_idx in range(n_lines):
         xs_gen = input_gen.Sparse_Binomial(nd=nd, ns=ns, fA=0.15, mu=4, n_burst=4, key=subkey2)
         my_driver = driver.Driver1_bScan(neuron=neuron, xs_generator=xs_gen, rng=subkey, hyperD=hyperD, initial_state=None, resample_every=1000, n_tested_patterns=1000)
     else:
-        hyperD = neurons.HyperDynConfig1(b=bias_center, bk=bk, beta=beta)
+        hyperD = neurons.HyperDynConfig1_SynapticBound(b=bias_center, bk=bk, beta=beta, reset_from=3.0, reset_to=3.0)
         my_driver.re_init(rng=subkey, hyperD=hyperD, initial_state=None)
 
     # Run simulation and get results
