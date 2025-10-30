@@ -45,9 +45,10 @@ for line_idx in range(n_lines):
         hyper = neurons.HyperConfig1(nd=nd, ns=ns, n=n, b=bias_center, bk=bk, beta=beta) # the values of b, bk, beta here are just placeholders here, they will be overwritten in the hyperD. 
         hyperD = neurons.HyperDynConfig1(b=bias_center, bk=bk, beta=beta)
         neuron = neurons.Neuron_Decay_Int(hyperparameters=hyper)
+        # neuron = neurons.Neuron_Decay_NonInt(hyperparameters=hyper)
         # xs_gen = input_gen.Normal(nd=nd, ns=ns)
         subkey, subkey2 = jax.random.split(subkey)
-        xs_gen = input_gen.Normal_Corr_across_Dendrites(nd=nd, ns=ns, coeff=1, key=subkey2)
+        xs_gen = input_gen.Normal_Corr_across_Dendrites(nd=nd, ns=ns, coeff=2, key=subkey2)
         my_driver = driver.Driver1_bScan(neuron=neuron, xs_generator=xs_gen, rng=subkey, hyperD=hyperD, initial_state=None, resample_every=1000, n_tested_patterns=1000)
     else:
         hyperD = neurons.HyperDynConfig1(b=bias_center, bk=bk, beta=beta)

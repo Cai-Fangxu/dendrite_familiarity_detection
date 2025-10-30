@@ -294,6 +294,44 @@ class Driver1_bScan_activationScan(Driver1_bScan):
         mask = np.any(np.isclose(self.steady_record, -100), axis=(1, 2)) # (n_steps_phase3,)
         self.steady_record = self.steady_record[~mask] # (n_recorded_steps, bs_size, n_tested_patterns)
 
+class Driver1_noNonlinearity(Driver1_bScan):
+    def __init__(self, neuron, xs_generator, rng, hyperD = None, initial_state = None, resample_every = 1000, n_tested_patterns = 1000):
+        super().__init__(neuron, xs_generator, rng, hyperD, initial_state, resample_every, n_tested_patterns)
+
+    def _update_record1(self, hyperD: HyperDynConfig1, state: State1, bs: jax.Array, xs: jax.Array, x0s: jax.Array): # bs: (bs_size,), xs: (resample_every, nd, ns), x0s: (n_tested_patterns, nd, ns)
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        def step_fn(carry, x): # carry = state
+            new_carry = self.neuron.update(hyperD, carry, x)
+            w = new_carry.w # (nd, ns)
+            us = jnp.sum(x0s * w, axis=-1) # (n_tested_patterns, nd)
+            y = jnp.sum(us, axis=-1) # (n_tested_patterns, )
+            y = y.reshape(1, -1) # (1, n_tested_patterns)
+            return new_carry, y
+        new_state, ys = jax.lax.scan(step_fn, state, xs) # ys: (resample_every, bs_size, n_tested_patterns)
+        return new_state, ys
+
+    def _update_record3_sparse(self, hyperD: HyperDynConfig1, state: State1, bs: jax.Array, xs: jax.Array, x0s: jax.Array, test_every: int): # bs: (bs_size,), x0s: (n_tested_patterns, nd, ns)
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        n_tested_patterns = x0s.shape[0]
+        bs_size = bs.shape[0]
+        def step_fn1(state, x): # carry = state
+            new_state = self.neuron.update(hyperD, state, x)
+            w = new_state.w # (nd, ns)
+            us = jnp.sum(x0s * w, axis=-1) # (n_tested_patterns, nd)
+            y = jnp.sum(us, axis=-1) # (n_tested_patterns, )
+            y = y.reshape(1, -1) # (1, n_tested_patterns)
+            return new_state, y
+        def step_fn2(state, x): # carry = state
+            new_state = self.neuron.update(hyperD, state, x)
+            y = jnp.full((1, n_tested_patterns), -100.)
+            return new_state, y
+        def step_fn(carry, y): # carry = (state, idx)
+            state, idx = carry
+            new_state, y = jax.lax.cond(idx % test_every == 0, step_fn1, step_fn2, state, y)
+            return (new_state, idx+1), y
+        (new_state, _), ys = jax.lax.scan(step_fn, (state, 0), xs) # ys: (resample_every, bs_size, n_tested_patterns)
+        return new_state, ys
+
 # endregion drivers-for-Type1-neurons
 
 

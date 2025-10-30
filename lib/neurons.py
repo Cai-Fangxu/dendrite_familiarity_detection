@@ -99,6 +99,17 @@ class Neuron_Decay_Int_SynapticBound(Neuron_Decay_Int):
         w = w.at[updated_idx].set(updated_w)
         new_state = State1(w=w)
         return new_state
+    
+class Neuron_Decay_Int_NoNonLinearity(Neuron_Decay_Int):
+    def __init__(self, hyperparameters: HyperConfig1):
+        super().__init__(hyperparameters)
+
+    @partial(jax.jit, static_argnames=('self',))
+    def _forward(self, hyperD: HyperDynConfig1, state: State1, x: jnp.ndarray): # x: (B, nd, ns)
+        w = state.w # (nd, ns)
+        u = jnp.sum(w * x, axis=-1) # (B, nd)
+        y = jnp.sum(u, axis=-1) # (B,)
+        return y
 
 # endregion neurontype1
 
