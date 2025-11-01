@@ -33,6 +33,7 @@ class HyperDynConfig1_SynapticBound(HyperDynConfig1):
 @dataclass
 class State1:
     w: jnp.ndarray # shape (nd, ns)
+    rng: jnp.ndarray = None # PRNGKey
 
 class Neuron_Decay_Int(Neuron[HyperConfig1, State1, HyperDynConfig1]): 
     def __init__(self, hyperparameters: HyperConfig1):
@@ -40,8 +41,9 @@ class Neuron_Decay_Int(Neuron[HyperConfig1, State1, HyperDynConfig1]):
 
     @partial(jax.jit, static_argnames=('self',))
     def init_state(self, rng, hyperD: HyperDynConfig1): 
+        rng_w, rng_state = jax.random.split(rng)
         w = jax.random.normal(rng, (self.hyper.nd, self.hyper.ns)) / jnp.sqrt(self.hyper.ns)
-        return State1(w=w)
+        return State1(w=w, rng=rng_state)
     
     @partial(jax.jit, static_argnames=('self',))
     def _forward(self, hyperD: HyperDynConfig1, state: State1, x: jnp.ndarray): # x: (B, nd, ns)
@@ -61,7 +63,7 @@ class Neuron_Decay_Int(Neuron[HyperConfig1, State1, HyperDynConfig1]):
         x_len_updated2 = jnp.linalg.norm(x[updated_idx], axis=-1, ord=2, keepdims=True)**2
         updated_w = w[updated_idx] + jnp.heaviside(bk-updated_overlap, 0.)[:, None] * ( x[updated_idx]/x_len_updated2*(bk-(1-beta/ns)*updated_overlap)[:, None]- beta/ns*w[updated_idx] ) # dim = (n, ns)
         w = w.at[updated_idx].set(updated_w)
-        new_state = State1(w=w)
+        new_state = State1(w=w, rng=state.rng)
         return new_state
     
 class Neuron_Decay_NonInt(Neuron_Decay_Int):
@@ -77,7 +79,7 @@ class Neuron_Decay_NonInt(Neuron_Decay_Int):
         overlaps = jnp.sum(w*x, axis=-1) # dim = (nd, )
         mask = jnp.heaviside(bk-overlaps, 0)*jnp.heaviside(overlaps-bla, 0.) # dim = (nd, )
         w = w + mask[:, None] * ( x/x_len2*(bk-(1-beta/ns)*overlaps)[:, None] - beta/ns*w ) # dim = (nd, ns)
-        new_state = State1(w=w)
+        new_state = State1(w=w, rng=state.rng)
         return new_state
 
 
@@ -97,10 +99,21 @@ class Neuron_Decay_Int_SynapticBound(Neuron_Decay_Int):
         updated_w = w[updated_idx] + jnp.heaviside(bk-updated_overlap, 0.)[:, None] * ( x[updated_idx]/x_len_updated2*(bk-(1-beta/ns)*updated_overlap)[:, None]- beta/ns*w[updated_idx] ) # dim = (n, ns)
         updated_w = jnp.where(jnp.abs(updated_w) > reset_from, reset_to*jnp.sign(updated_w), updated_w)
         w = w.at[updated_idx].set(updated_w)
-        new_state = State1(w=w)
+        new_state = State1(w=w, rng=state.rng)
         return new_state
     
 class Neuron_Decay_Int_NoNonLinearity(Neuron_Decay_Int):
+    def __init__(self, hyperparameters: HyperConfig1):
+        super().__init__(hyperparameters)
+
+    @partial(jax.jit, static_argnames=('self',))
+    def _forward(self, hyperD: HyperDynConfig1, state: State1, x: jnp.ndarray): # x: (B, nd, ns)
+        w = state.w # (nd, ns)
+        u = jnp.sum(w * x, axis=-1) # (B, nd)
+        y = jnp.sum(u, axis=-1) # (B,)
+        return y
+
+class Neuron_Decay_NonInt_NoNonLinearity(Neuron_Decay_NonInt):
     def __init__(self, hyperparameters: HyperConfig1):
         super().__init__(hyperparameters)
 

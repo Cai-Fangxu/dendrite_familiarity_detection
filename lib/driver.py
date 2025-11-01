@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from flax.struct import dataclass
+from flax.struct import dataclasses
 from functools import partial
 from typing import Tuple
 
@@ -331,6 +332,125 @@ class Driver1_noNonlinearity(Driver1_bScan):
             return (new_state, idx+1), y
         (new_state, _), ys = jax.lax.scan(step_fn, (state, 0), xs) # ys: (resample_every, bs_size, n_tested_patterns)
         return new_state, ys
+
+class Driver1_NoisyRecall_SynapseNoise(Driver1_bScan):
+    def __init__(self, neuron, xs_generator, rng, noise_level=0.0, hyperD = None, initial_state = None, resample_every = 1000, n_tested_patterns = 1000):
+        super().__init__(neuron, xs_generator, rng, hyperD, initial_state, resample_every, n_tested_patterns)
+        self.noise_level = noise_level
+
+    def _update_record1(self, hyperD: HyperDynConfig1, state: State1, bs: jax.Array, xs: jax.Array, x0s: jax.Array): # bs: (bs_size,), xs: (resample_every, nd, ns), x0s: (n_tested_patterns, nd, ns)
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        nd = xs.shape[1]
+        rng = state.rng
+        rng_noise, new_rng = jax.random.split(rng)
+        noise_arr = jax.random.normal(rng_noise, (self.resample_every, self.n_tested_patterns, nd)) * self.noise_level # (resample_every, n_tested_patterns, nd)
+        state = dataclasses.replace(state, rng=new_rng)
+
+        def step_fn(carry, inp): # carry = state, inp = (x, noise)
+            x, noise = inp # x: (nd, ns), noise: (n_tested_patterns, nd)
+            new_carry = self.neuron.update(hyperD, carry, x)
+            w = new_carry.w # (nd, ns)
+            w_len = jnp.linalg.norm(w, axis=-1) # (nd,)
+            us = jnp.sum(x0s * w, axis=-1) # (n_tested_patterns, nd)
+            us = us + noise * w_len[None, :] # (n_tested_patterns, nd)
+            z = jax.nn.relu(us[None, :, :] - bs[:, None, None]) # (bs_size, n_tested_patterns, nd)
+            y = jnp.sum(z, axis=-1) # (bs_size, n_tested_patterns)
+            return new_carry, y
+        new_state, ys = jax.lax.scan(step_fn, state, (xs, noise_arr)) # ys: (resample_every, bs_size, n_tested_patterns)
+        return new_state, ys
+    
+    def _update_record3_sparse(self, hyperD: HyperDynConfig1, state: State1, bs: jax.Array, xs: jax.Array, x0s: jax.Array, test_every: int): # bs: (bs_size,), x0s: (n_tested_patterns, nd, ns)
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        n_tested_patterns = x0s.shape[0]
+        bs_size = bs.shape[0]
+
+        nd = xs.shape[1]
+        rng = state.rng
+        rng_noise, new_rng = jax.random.split(rng)
+        noise_arr = jax.random.normal(rng_noise, (self.resample_every, self.n_tested_patterns, nd)) * self.noise_level # (resample_every, n_tested_patterns, nd)
+        state = dataclasses.replace(state, rng=new_rng)
+
+        def step_fn1(state, inp): # carry = state, inp = (x, noise)
+            x, noise = inp # x: (nd, ns), noise: (n_tested_patterns, nd)
+            new_state = self.neuron.update(hyperD, state, x)
+            w = new_state.w # (nd, ns)
+            w_len = jnp.linalg.norm(w, axis=-1) # (nd,)
+            us = jnp.sum(x0s * w, axis=-1) # (n_tested_patterns, nd)
+            us = us + noise * w_len[None, :] # (n_tested_patterns, nd)
+            z = jax.nn.relu(us[None, :, :] - bs[:, None, None]) # (bs_size, n_tested_patterns, nd)
+            y = jnp.sum(z, axis=-1) # (bs_size, n_tested_patterns)
+            return new_state, y
+        def step_fn2(state, inp): # carry = state, inp = (x, noise)
+            x, noise = inp # x: (nd, ns), noise: (n_tested_patterns, nd)
+            new_state = self.neuron.update(hyperD, state, x)
+            y = jnp.full((bs_size, n_tested_patterns), -100.)
+            return new_state, y
+        def step_fn(carry, y): # carry = (state, idx)
+            state, idx = carry
+            new_state, y = jax.lax.cond(idx % test_every == 0, step_fn1, step_fn2, state, y)
+            return (new_state, idx+1), y
+        (new_state, _), ys = jax.lax.scan(step_fn, (state, 0), (xs, noise_arr)) # ys: (resample_every, bs_size, n_tested_patterns)
+        return new_state, ys
+
+class Driver1_NoisyRecall_SomaNoise(Driver1_bScan):
+    def __init__(self, neuron, xs_generator, rng, noise_level=0.0, hyperD = None, initial_state = None, resample_every = 1000, n_tested_patterns = 1000):
+        super().__init__(neuron, xs_generator, rng, hyperD, initial_state, resample_every, n_tested_patterns)
+        self.noise_level = noise_level
+
+    def _update_record1(self, hyperD: HyperDynConfig1, state: State1, bs: jax.Array, xs: jax.Array, x0s: jax.Array): # bs: (bs_size,), xs: (resample_every, nd, ns), x0s: (n_tested_patterns, nd, ns)
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        nd = xs.shape[1]
+        rng = state.rng
+        rng_noise, new_rng = jax.random.split(rng)
+        noise_arr = jax.random.normal(rng_noise, (self.resample_every, self.n_tested_patterns)) * self.noise_level # (resample_every, n_tested_patterns)
+        state = dataclasses.replace(state, rng=new_rng)
+
+        def step_fn(carry, inp): # carry = state, inp = (x, noise)
+            x, noise = inp # x: (nd, ns), noise: (n_tested_patterns, )
+            new_carry = self.neuron.update(hyperD, carry, x)
+            w = new_carry.w # (nd, ns)
+            w_len = jnp.linalg.norm(w) # scalar
+            us = jnp.sum(x0s * w, axis=-1) # (n_tested_patterns, nd)
+            z = jax.nn.relu(us[None, :, :] - bs[:, None, None]) # (bs_size, n_tested_patterns, nd)
+            y = jnp.sum(z, axis=-1) # (bs_size, n_tested_patterns)
+            y = y + noise[None, :] * w_len # (bs_size, n_tested_patterns)
+            return new_carry, y
+        new_state, ys = jax.lax.scan(step_fn, state, (xs, noise_arr)) # ys: (resample_every, bs_size, n_tested_patterns)
+        return new_state, ys
+    
+    def _update_record3_sparse(self, hyperD: HyperDynConfig1, state: State1, bs: jax.Array, xs: jax.Array, x0s: jax.Array, test_every: int): # bs: (bs_size,), x0s: (n_tested_patterns, nd, ns)
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        n_tested_patterns = x0s.shape[0]
+        bs_size = bs.shape[0]
+
+        nd = xs.shape[1]
+        rng = state.rng
+        rng_noise, new_rng = jax.random.split(rng)
+        noise_arr = jax.random.normal(rng_noise, (self.resample_every, self.n_tested_patterns)) * self.noise_level # (resample_every, n_tested_patterns)
+        state = dataclasses.replace(state, rng=new_rng)
+
+        def step_fn1(state, inp): # carry = state, inp = (x, noise)
+            x, noise = inp # x: (nd, ns), noise: (n_tested_patterns, )
+            new_state = self.neuron.update(hyperD, state, x)
+            w = new_state.w # (nd, ns)
+            w_len = jnp.linalg.norm(w) # scalar
+            us = jnp.sum(x0s * w, axis=-1) # (n_tested_patterns, nd)
+            z = jax.nn.relu(us[None, :, :] - bs[:, None, None]) # (bs_size, n_tested_patterns, nd)
+            y = jnp.sum(z, axis=-1) # (bs_size, n_tested_patterns)
+            y = y + noise[None, :] * w_len # (bs_size, n_tested_patterns)
+            return new_state, y
+        def step_fn2(state, inp): # carry = state, inp = (x, noise)
+            x, noise = inp # x: (nd, ns), noise: (n_tested_patterns, )
+            new_state = self.neuron.update(hyperD, state, x)
+            y = jnp.full((bs_size, n_tested_patterns), -100.)
+            return new_state, y
+        def step_fn(carry, y): # carry = (state, idx)
+            state, idx = carry
+            new_state, y = jax.lax.cond(idx % test_every == 0, step_fn1, step_fn2, state, y)
+            return (new_state, idx+1), y
+        (new_state, _), ys = jax.lax.scan(step_fn, (state, 0), (xs, noise_arr)) # ys: (resample_every, bs_size, n_tested_patterns)
+        return new_state, ys
+
 
 # endregion drivers-for-Type1-neurons
 
