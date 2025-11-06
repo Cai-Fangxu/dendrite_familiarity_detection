@@ -2,10 +2,11 @@ import numpy as np
 from numba import njit, prange
 
 @njit(parallel=True, fastmath=True)
-def capacity_numba(transient_record: np.ndarray, steady_record: np.ndarray) -> np.ndarray:
+def capacity_numba(transient_record: np.ndarray, steady_record: np.ndarray, upper99_s=None) -> np.ndarray:
     """
-    transient_record : (n_steps1, n_bs, n_patterns)  float64
-    steady_record : (n_steps3, n_bs, n_patterns)  float64
+    transient_record : (n_steps1, n_bs, n_patterns) float64
+    steady_record : (n_steps3, n_bs, n_patterns) float64 or None
+    upper99s : (n_bs,) float64 or None
     returns
     --------
     capacity : (n_bs,) float64
@@ -18,9 +19,12 @@ def capacity_numba(transient_record: np.ndarray, steady_record: np.ndarray) -> n
 
     for scan_idx in prange(n_scans):                                   # parallel over batches
         # --- 99-th percentile on the steady slice
-        steady   = steady_record[:, scan_idx, :].ravel()
-        k99      = max(0, int(np.ceil(0.99 * steady.size)) - 1)
-        upper99  = np.partition(steady, k99)[k99] + eps
+        if upper99_s is None:
+            steady   = steady_record[:, scan_idx, :].ravel()
+            k99      = max(0, int(np.ceil(0.99 * steady.size)) - 1)
+            upper99  = np.partition(steady, k99)[k99] + eps
+        else:
+            upper99 = upper99_s[scan_idx]
 
         # --- stream through time; no big temp arrays needed
         sum_crossings = 0.0

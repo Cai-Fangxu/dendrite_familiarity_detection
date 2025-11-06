@@ -38,6 +38,11 @@ for line_idx in range(n_lines):
 
     bs = jnp.linspace(bias_center-b_spacing*(bs_size//2), bias_center+b_spacing*(bs_size//2), bs_size)
 
+    if line_idx < 0:
+        coeff = "infty"
+    else:
+        coeff = 16
+
     # Initialization phase. Recompile only when nd or n changes.
     rng, subkey = jax.random.split(rng)
     if nd != old_nd or n != old_n:
@@ -46,10 +51,11 @@ for line_idx in range(n_lines):
         hyperD = neurons.HyperDynConfig1(b=bias_center, bk=bk, beta=beta)
         neuron = neurons.Neuron_Decay_Int(hyperparameters=hyper)
         # neuron = neurons.Neuron_Decay_NonInt(hyperparameters=hyper)
-        xs_gen = input_gen.Normal(nd=nd, ns=ns)
-        # subkey, subkey2 = jax.random.split(subkey)
-        # xs_gen = input_gen.Normal_Corr_across_Dendrites(nd=nd, ns=ns, coeff=2, key=subkey2)
-        my_driver = driver.Driver1_NoisyRecall_SomaNoise(neuron=neuron, xs_generator=xs_gen, rng=subkey, noise_level=0.1, hyperD=hyperD, initial_state=None, resample_every=1000, n_tested_patterns=1000)
+        # xs_gen = input_gen.Normal(nd=nd, ns=ns)
+        subkey, subkey2 = jax.random.split(subkey)
+        xs_gen = input_gen.Normal_Corr_across_Dendrites(nd=nd, ns=ns, coeff=16, key=subkey2)
+        # my_driver = driver.Driver1_NoisyRecall_SomaNoise(neuron=neuron, xs_generator=xs_gen, rng=subkey, noise_level=0.1, hyperD=hyperD, initial_state=None, resample_every=1000, n_tested_patterns=1000)
+        my_driver = driver.Driver1_NoisyRecall_SomaNoise3(neuron=neuron, xs_generator=xs_gen, rng=subkey, noise_level=0.1, max_Y=3.0, hyperD=hyperD, initial_state=None, resample_every=1000, n_tested_patterns=1000)
     else:
         hyperD = neurons.HyperDynConfig1(b=bias_center, bk=bk, beta=beta)
         my_driver.re_init(rng=subkey, hyperD=hyperD, initial_state=None)
@@ -67,7 +73,7 @@ for line_idx in range(n_lines):
             bs=bs
         )  # no need to re-initialize for different repeats
 
-        capas = utils.capacity_numba(my_driver.transient_record, my_driver.steady_record)  # (bs_size,)
+        capas = utils.capacity_numba(my_driver.transient_record, my_driver.steady_record, upper99_s=my_driver.upper99_s)  # (bs_size,)
         capa_list[:, repeat_idx] = capas
 
     tmp_data = np.zeros((bs_size, 3 + n_repeat))  # (bs_size, 3+n_repeat)
@@ -75,11 +81,15 @@ for line_idx in range(n_lines):
     tmp_data[:, 1] = bk
     tmp_data[:, 2] = beta
     tmp_data[:, 3:] = capa_list
-    folder_path = f"{tmp_data_folder}nd{nd}_ns{ns}/"
+
+    if line_idx < 0:
+        folder_path = f"{tmp_data_folder}coeff_16/const_noise_0.1/nd{nd}_ns{ns}/"
+    else:
+        folder_path = f"{tmp_data_folder}coeff_16/const_noise_0.5/nd{nd}_ns{ns}/"
+
     os.makedirs(folder_path, exist_ok=True)
     with open(f"{folder_path}n{n}.csv", 'a') as f:
         np.savetxt(f, tmp_data, delimiter=',', fmt=['%.3f', '%.3f', '%.6f']+['%.2f' for _ in range(n_repeat)])
-
 
     # Clear memory after each iteration
     my_driver.transient_record = None
