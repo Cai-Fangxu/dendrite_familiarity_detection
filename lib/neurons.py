@@ -82,7 +82,6 @@ class Neuron_Decay_NonInt(Neuron_Decay_Int):
         new_state = State1(w=w, rng=state.rng)
         return new_state
 
-
 class Neuron_Decay_Int_SynapticBound(Neuron_Decay_Int):
     def __init__(self, hyperparameters: HyperConfig1):
         super().__init__(hyperparameters)
