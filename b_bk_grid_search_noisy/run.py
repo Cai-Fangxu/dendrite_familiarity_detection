@@ -38,12 +38,18 @@ for line_idx in range(n_lines):
 
     bs = jnp.linspace(bias_center-b_spacing*(bs_size//2), bias_center+b_spacing*(bs_size//2), bs_size)
 
-    if line_idx < 0:
+    if line_idx < 520:
+        coeff = 8
+        noise_level = 0.5
+    elif line_idx < 1040:
         coeff = 4
-    elif line_idx < 0:
-        coeff = 2
+        noise_level = 0.2
+    elif line_idx < 1560:
+        coeff = 4
+        noise_level = 0.25
     else:
-        coeff = "infty"
+        coeff = 4
+        noise_level = 0.3
 
     # Initialization phase. Recompile only when nd or n changes.
     rng, subkey = jax.random.split(rng)
@@ -60,7 +66,7 @@ for line_idx in range(n_lines):
             xs_gen = input_gen.Normal_Corr_across_Dendrites(nd=nd, ns=ns, coeff=coeff, key=subkey2)
         # my_driver = driver.Driver1_NoisyRecall_SomaNoise(neuron=neuron, xs_generator=xs_gen, rng=subkey, noise_level=0.1, hyperD=hyperD, initial_state=None, resample_every=1000, n_tested_patterns=1000)
         # my_driver = driver.Driver1_NoisyRecall_SomaNoise3(neuron=neuron, xs_generator=xs_gen, rng=subkey, noise_level=0.3, max_Y=3.0, hyperD=hyperD, initial_state=None, resample_every=1000, n_tested_patterns=1000)
-        my_driver = driver.Driver1_NoisyRecall_DendriteNoise(neuron=neuron, xs_generator=xs_gen, rng=subkey, noise_level=0.15, hyperD=hyperD, initial_state=None, resample_every=1000, n_tested_patterns=1000)
+        my_driver = driver.Driver1_NoisyRecall_DendriteNoise(neuron=neuron, xs_generator=xs_gen, rng=subkey, noise_level=noise_level, hyperD=hyperD, initial_state=None, resample_every=1000, n_tested_patterns=1000)
     else:
         hyperD = neurons.HyperDynConfig1(b=bias_center, bk=bk, beta=beta)
         my_driver.re_init(rng=subkey, hyperD=hyperD, initial_state=None)
@@ -87,12 +93,14 @@ for line_idx in range(n_lines):
     tmp_data[:, 2] = beta
     tmp_data[:, 3:] = capa_list
 
-    if line_idx < 0:
-        folder_path = f"{tmp_data_folder}coeff_4/thetaY_noise_0.15/nd{nd}_ns{ns}/"
-    elif line_idx < 0:
-        folder_path = f"{tmp_data_folder}coeff_2/thetaY_noise_0.15/nd{nd}_ns{ns}/"
+    if line_idx < 520:
+        folder_path = f"{tmp_data_folder}coeff_8/dendrite_noise_0.5/nd{nd}_ns{ns}/"
+    elif line_idx < 1040:
+        folder_path = f"{tmp_data_folder}coeff_4/dendrite_noise_0.2/nd{nd}_ns{ns}/"
+    elif line_idx < 1560:
+        folder_path = f"{tmp_data_folder}coeff_4/dendrite_noise_0.25/nd{nd}_ns{ns}/"
     else:
-        folder_path = f"{tmp_data_folder}coeff_infty/dendrite_noise_0.15/nd{nd}_ns{ns}/"
+        folder_path = f"{tmp_data_folder}coeff_4/dendrite_noise_0.3/nd{nd}_ns{ns}/"
 
     os.makedirs(folder_path, exist_ok=True)
     with open(f"{folder_path}n{n}.csv", 'a') as f:
