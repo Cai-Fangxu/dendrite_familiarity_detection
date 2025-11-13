@@ -652,6 +652,55 @@ class Driver1_NoisyRecall_SomaNoise3(Driver1_bScan):
             self.transient_record[:, :, i] = np.roll(self.transient_record[:, :, i], -i, axis=0)
         self.transient_record = self.transient_record[:n_steps_phase1-self.n_tested_patterns]
 
+class Driver1_NoisyRecall_DendriteSomaNoise(Driver1_NoisyRecall_DendriteNoise):
+    def __init__(self, neuron, xs_generator, rng, dendrite_noise_level=0, soma_noise_level=0, hyperD=None, initial_state=None, resample_every=1000, n_tested_patterns=1000):
+        super().__init__(neuron, xs_generator, rng, dendrite_noise_level, hyperD, initial_state, resample_every, n_tested_patterns)
+        self.soma_noise_level = soma_noise_level
+
+    @partial(jax.jit, static_argnames=('self', ))
+    def add_soma_noise(self, ys: jax.Array, upper99_s: jax.Array, rng: jax.Array):
+        """ ys: (n_steps, bs_size, n_tested_patterns), upper99_s: (bs_size,) """
+        noise = jax.random.normal(rng, ys.shape) * self.soma_noise_level * upper99_s[None, :, None] # (n_steps, bs_size, n_tested_patterns)
+        ys = ys + noise
+        return ys
+    
+    def run(self, 
+            n_init_steps: int,
+            n_steps_phase1: int, # must be larger than n_tested_patterns
+            n_steps_phase2: int,
+            n_steps_phase3: int,
+            test_every_phase3: int,
+            bs: jax.Array,
+            ):
+        if self.state is None:
+            self.rng, rng1, rng2 = jax.random.split(self.rng, 3)
+            self.state = self.neuron.init_state(rng1, self.hyperD)
+            self.state = self.init_phase(rng2, self.hyperD, self.state, n_init_steps)
+
+        self.rng, rng1, rng2, rng3, rng4 = jax.random.split(self.rng, 5)
+        x0s = self.xs_generator.generate(rng1, self.n_tested_patterns) # (n_tested_patterns, nd, ns)
+        self.state, transient_record = self.record_phase1(rng2, self.hyperD, self.state, n_steps_phase1, bs, x0s)
+        self.state = self.no_record_phase2(rng3, self.hyperD, self.state, n_steps_phase2)
+        self.state, steady_record = self.steady_record_phase3(rng4, self.hyperD, self.state, n_steps_phase3, test_every_phase3, bs, x0s)
+
+        # exclude empty records in steady_record
+        mask = jnp.any(jnp.isclose(steady_record, -100), axis=(1, 2)) # (n_steps_phase3,)
+        steady_record = steady_record[~mask] # (n_recorded_steps, bs_size, n_tested_patterns)
+
+        self.rng, noise_rng1, noise_rng2 = jax.random.split(self.rng, 3)
+        upper99_s = self.get_upper99(steady_record) # (bs_size,)
+        transient_record = self.add_soma_noise(transient_record, upper99_s, noise_rng1)
+        steady_record = self.add_soma_noise(steady_record, upper99_s, noise_rng2)
+        self.upper99_s = self.get_upper99(steady_record) # (bs_size,)
+
+        self.transient_record = np.array(transient_record) # (n_steps_phase1, bs_size, n_tested_patterns)
+        self.steady_record = np.array(steady_record) # (n_recorded_steps, bs_size, n_tested_patterns)
+        self.upper99_s = np.array(self.upper99_s) # (bs_size,)
+
+        # realign the transient_record so that the row index corresponds to the delay
+        for i in range(self.n_tested_patterns):
+            self.transient_record[:, :, i] = np.roll(self.transient_record[:, :, i], -i, axis=0)
+        self.transient_record = self.transient_record[:n_steps_phase1-self.n_tested_patterns]
 
 # endregion drivers-for-Type1-neurons
 
