@@ -702,6 +702,245 @@ class Driver1_NoisyRecall_DendriteSomaNoise(Driver1_NoisyRecall_DendriteNoise):
             self.transient_record[:, :, i] = np.roll(self.transient_record[:, :, i], -i, axis=0)
         self.transient_record = self.transient_record[:n_steps_phase1-self.n_tested_patterns]
 
+class Driver1_NoisyRecall_SomaNoise3Scan(Driver1_bScan):
+    """ Scan different noise levels during recall """
+    def __init__(self, neuron, xs_generator, rng, hyperD = None, initial_state = None, resample_every = 1000, n_tested_patterns = 1000):
+        super().__init__(neuron, xs_generator, rng, hyperD, initial_state, resample_every, n_tested_patterns)
+
+    @partial(jax.jit, static_argnames=('self', ))
+    def get_upper99(self, steady_record: jax.Array):
+        """ steady_record: (n_steps, bs_size, n_tested_patterns) """
+        eps = 1e-5
+        n_steps, n_tested_patterns = steady_record.shape[0], steady_record.shape[2]
+        tmp = jnp.transpose(steady_record, (1, 0, 2)) # (bs_size, n_steps, n_tested_patterns)
+        tmp = tmp.reshape(tmp.shape[0], -1) # (bs_size, n_steps*n_tested_patterns)
+        k99 = max(0, int(np.ceil(0.99 * n_steps*n_tested_patterns)) - 1)
+        upper99_s = jnp.partition(tmp, k99, axis=1)[:, k99] + eps # (bs_size,)
+        return upper99_s
+
+    @partial(jax.jit, static_argnames=('self', ))
+    def add_noises(self, ys: jax.Array, noise_levels: jax.Array, upper99_s: jax.Array, rng: jax.Array):
+        """ ys: (n_steps, 1, n_tested_patterns), upper99_s: (1, ), noise_levels: (n_levels,) """
+        noise = jax.random.normal(rng, ys.shape)[:, :, None, :] * noise_levels[None, None, :, None] * upper99_s[None, :, None, None] # (n_steps, 1, n_levels, n_tested_patterns)
+        noise = noise[:, 0, :, :] # (n_steps, n_levels, n_tested_patterns)
+        ys = ys[:, 0][:, None, :] + noise # (n_steps, n_levels, n_tested_patterns) 
+        return ys
+    
+    def run(self, 
+            n_init_steps: int,
+            n_steps_phase1: int, # must be larger than n_tested_patterns
+            n_steps_phase2: int,
+            n_steps_phase3: int,
+            test_every_phase3: int,
+            noise_levels: jax.Array, # (n_levels,)
+            ):
+        if self.state is None:
+            self.rng, rng1, rng2 = jax.random.split(self.rng, 3)
+            self.state = self.neuron.init_state(rng1, self.hyperD)
+            self.state = self.init_phase(rng2, self.hyperD, self.state, n_init_steps)
+
+        b = self.neuron.hyper.b
+        bs = jnp.array([b]) # (1,)
+
+        self.rng, rng1, rng2, rng3, rng4 = jax.random.split(self.rng, 5)
+        x0s = self.xs_generator.generate(rng1, self.n_tested_patterns) # (n_tested_patterns, nd, ns)
+        self.state, transient_record = self.record_phase1(rng2, self.hyperD, self.state, n_steps_phase1, bs, x0s)
+        self.state = self.no_record_phase2(rng3, self.hyperD, self.state, n_steps_phase2)
+        self.state, steady_record = self.steady_record_phase3(rng4, self.hyperD, self.state, n_steps_phase3, test_every_phase3, bs, x0s)
+
+        # exclude empty records in steady_record
+        mask = jnp.any(jnp.isclose(steady_record, -100), axis=(1, 2)) # (n_steps_phase3,)
+        steady_record = steady_record[~mask] # (n_recorded_steps, 1, n_tested_patterns)
+
+        self.rng, noise_rng1, noise_rng2 = jax.random.split(self.rng, 3)
+        upper99_s = self.get_upper99(steady_record) # (1,)
+        transient_record = self.add_noises(transient_record, noise_levels, upper99_s, noise_rng1) # (n_steps, n_levels, n_tested_patterns)
+        steady_record = self.add_noises(steady_record, noise_levels, upper99_s, noise_rng2) # (n_steps, n_levels, n_tested_patterns)
+        self.upper99_s = self.get_upper99(steady_record) # (n_levels,)
+
+        self.transient_record = np.array(transient_record) # (n_steps_phase1, n_levels, n_tested_patterns)
+        self.steady_record = np.array(steady_record) # (n_recorded_steps, n_levels, n_tested_patterns)
+        self.upper99_s = np.array(self.upper99_s) # (n_levels,)
+
+        # realign the transient_record so that the row index corresponds to the delay
+        for i in range(self.n_tested_patterns):
+            self.transient_record[:, :, i] = np.roll(self.transient_record[:, :, i], -i, axis=0)
+        self.transient_record = self.transient_record[:n_steps_phase1-self.n_tested_patterns]
+
+class Driver1_NoisyRecall_DendriteNoiseScan(Driver1_bScan):
+    def __init__(self, neuron, xs_generator, rng, hyperD = None, initial_state = None, resample_every = 1000, n_tested_patterns = 1000):
+        super().__init__(neuron, xs_generator, rng, hyperD, initial_state, resample_every, n_tested_patterns)
+
+    def _update_record1(self, hyperD: HyperDynConfig1, state: State1, noise_levels: jax.Array, xs: jax.Array, x0s: jax.Array): # bs: (bs_size,), xs: (resample_every, nd, ns), x0s: (n_tested_patterns, nd, ns)
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        nd = xs.shape[1]
+        rng = state.rng
+        rng_noise, new_rng = jax.random.split(rng)
+        noise_arr = jax.random.normal(rng_noise, (self.resample_every, self.n_tested_patterns, nd)) # (resample_every, n_tested_patterns, nd)
+        state = dataclasses.replace(state, rng=new_rng)
+        bk, b = hyperD.bk, hyperD.b
+        kappa = bk - b
+
+        def step_fn(carry, inp): # carry = state, inp = (x, noise)
+            x, noise = inp # x: (nd, ns), noise: (n_tested_patterns, nd)
+            new_carry = self.neuron.update(hyperD, carry, x)
+            w = new_carry.w # (nd, ns)
+            w_len = jnp.linalg.norm(w, axis=-1) # (nd,)
+            us = jnp.sum(x0s * w, axis=-1) # (n_tested_patterns, nd)
+            z = jax.nn.relu(us - b) # (n_tested_patterns, nd)
+            mask = jnp.heaviside(z, 0)
+            z = z[None, :, :] + (mask*noise*kappa*w_len[None, :])[None, :, :] * noise_levels[:, None, None] # (n_noise_levels, n_tested_patterns, nd)
+            y = jnp.sum(z, axis=-1) # (n_noise_levels, n_tested_patterns)
+            return new_carry, y
+        new_state, ys = jax.lax.scan(step_fn, state, (xs, noise_arr)) # ys: (resample_every, n_noise_levels, n_tested_patterns)
+        return new_state, ys
+    
+    def _update_record3_sparse(self, hyperD: HyperDynConfig1, state: State1, noise_levels: jax.Array, xs: jax.Array, x0s: jax.Array, test_every: int): # bs: (bs_size,), x0s: (n_tested_patterns, nd, ns)
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        n_tested_patterns = x0s.shape[0]
+        n_noise_levels = noise_levels.shape[0]
+
+        nd = xs.shape[1]
+        rng = state.rng
+        rng_noise, new_rng = jax.random.split(rng)
+        noise_arr = jax.random.normal(rng_noise, (self.resample_every, self.n_tested_patterns, nd)) # (resample_every, n_tested_patterns, nd)
+        state = dataclasses.replace(state, rng=new_rng)
+        bk, b = hyperD.bk, hyperD.b
+        kappa = bk - b
+
+        def step_fn1(state, inp): # carry = state, inp = (x, noise)
+            x, noise = inp # x: (nd, ns), noise: (n_tested_patterns, nd)
+            new_state = self.neuron.update(hyperD, state, x)
+            w = new_state.w # (nd, ns)
+            w_len = jnp.linalg.norm(w, axis=-1) # (nd,)
+            us = jnp.sum(x0s * w, axis=-1) # (n_tested_patterns, nd)
+            z = jax.nn.relu(us-b) # (n_tested_patterns, nd)
+            mask = jnp.heaviside(z, 0) # (n_tested_patterns, nd)
+            z = z[None, :, :] + (mask*noise*kappa*w_len[None, :])[None, :, :] * noise_levels[:, None, None] # (n_noise_levels, n_tested_patterns, nd)
+            y = jnp.sum(z, axis=-1) # (n_noise_levels, n_tested_patterns)
+            return new_state, y
+        def step_fn2(state, inp): # carry = state, inp = (x, noise)
+            x, noise = inp # x: (nd, ns), noise: (n_tested_patterns, nd)
+            new_state = self.neuron.update(hyperD, state, x)
+            y = jnp.full((n_noise_levels, n_tested_patterns), -100.)
+            return new_state, y
+        def step_fn(carry, y): # carry = (state, idx)
+            state, idx = carry
+            new_state, y = jax.lax.cond(idx % test_every == 0, step_fn1, step_fn2, state, y)
+            return (new_state, idx+1), y
+        (new_state, _), ys = jax.lax.scan(step_fn, (state, 0), (xs, noise_arr)) # ys: (resample_every, n_noise_levels, n_tested_patterns)
+        return new_state, ys
+    
+    def run(self, 
+            n_init_steps: int,
+            n_steps_phase1: int, # must be larger than n_tested_patterns
+            n_steps_phase2: int,
+            n_steps_phase3: int,
+            test_every_phase3: int,
+            noise_levels: jax.Array,
+            ):
+        if self.state is None:
+            self.rng, rng1, rng2 = jax.random.split(self.rng, 3)
+            self.state = self.neuron.init_state(rng1, self.hyperD)
+            self.state = self.init_phase(rng2, self.hyperD, self.state, n_init_steps)
+
+        self.rng, rng1, rng2, rng3, rng4 = jax.random.split(self.rng, 5)
+        x0s = self.xs_generator.generate(rng1, self.n_tested_patterns) # (n_tested_patterns, nd, ns)
+        self.state, transient_record = self.record_phase1(rng2, self.hyperD, self.state, n_steps_phase1, noise_levels, x0s) # note here noise_levels is passed as bs
+        self.state = self.no_record_phase2(rng3, self.hyperD, self.state, n_steps_phase2)
+        self.state, steady_record = self.steady_record_phase3(rng4, self.hyperD, self.state, n_steps_phase3, test_every_phase3, noise_levels, x0s) # note here noise_levels is passed as bs
+
+        # exclude empty records in steady_record
+        mask = jnp.any(jnp.isclose(steady_record, -100), axis=(1, 2)) # (n_steps_phase3,)
+        steady_record = steady_record[~mask] # (n_recorded_steps, n_noise_levels, n_tested_patterns)
+        self.upper99_s = np.array(self.get_upper99(steady_record)) # (n_noise_levels,)
+
+        self.transient_record = np.array(transient_record) # (n_steps_phase1, n_noise_levels, n_tested_patterns)
+        self.steady_record = np.array(steady_record) # (n_recorded_steps, n_noise_levels, n_tested_patterns)
+
+        # realign the transient_record so that the row index corresponds to the delay
+        for i in range(self.n_tested_patterns):
+            self.transient_record[:, :, i] = np.roll(self.transient_record[:, :, i], -i, axis=0)
+        self.transient_record = self.transient_record[:n_steps_phase1-self.n_tested_patterns]
+    
+class Driver1_thetaY_record(Driver1_bScan):
+
+    def _update_record1(self, hyperD: HyperDynConfig1, state: State1, bs: jax.Array, xs: jax.Array, x0s: jax.Array): # bs: (bs_size,), xs: (resample_every, nd, ns), x0s: (n_tested_patterns, nd, ns)
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        bs_size = bs.shape[0]
+        def step_fn(carry, x): # carry = state
+            new_carry = self.neuron.update(hyperD, carry, x)
+            return new_carry, None
+        new_state, _ = jax.lax.scan(step_fn, state, xs) # ys: (resample_every, bs_size, n_tested_patterns)
+        return new_state, jnp.zeros((self.resample_every, bs_size, self.n_tested_patterns))
+
+    def run(self, 
+            n_init_steps: int,
+            n_steps_phase1: int, # must be larger than n_tested_patterns
+            n_steps_phase2: int,
+            n_steps_phase3: int,
+            test_every_phase3: int,
+            bs: jax.Array,
+            ):
+        if self.state is None:
+            self.rng, rng1, rng2 = jax.random.split(self.rng, 3)
+            self.state = self.neuron.init_state(rng1, self.hyperD)
+            self.state = self.init_phase(rng2, self.hyperD, self.state, n_init_steps)
+
+        self.rng, rng1, rng2, rng3, rng4 = jax.random.split(self.rng, 5)
+        x0s = self.xs_generator.generate(rng1, self.n_tested_patterns) # (n_tested_patterns, nd, ns)
+        self.state, _ = self.record_phase1(rng2, self.hyperD, self.state, n_steps_phase1, bs, x0s)
+        self.state = self.no_record_phase2(rng3, self.hyperD, self.state, n_steps_phase2)
+        self.state, steady_record = self.steady_record_phase3(rng4, self.hyperD, self.state, n_steps_phase3, test_every_phase3, bs, x0s)
+
+        # exclude empty records in steady_record
+        mask = jnp.any(jnp.isclose(steady_record, -100), axis=(1, 2)) # (n_steps_phase3,)
+        steady_record = steady_record[~mask] # (n_recorded_steps, bs_size, n_tested_patterns)
+
+        self.upper99_s = np.array(self.get_upper99(steady_record)) # (bs_size,)
+
+class Driver1_DendriteNoise_thetaY_record(Driver1_NoisyRecall_DendriteNoise):
+    def _update_record1(self, hyperD: HyperDynConfig1, state: State1, bs: jax.Array, xs: jax.Array, x0s: jax.Array): # bs: (bs_size,), xs: (resample_every, nd, ns), x0s: (n_tested_patterns, nd, ns)
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        nd = xs.shape[1]
+        rng = state.rng
+        rng_noise, new_rng = jax.random.split(rng)
+        noise_arr = jax.random.normal(rng_noise, (self.resample_every, self.n_tested_patterns, nd)) * self.noise_level # (resample_every, n_tested_patterns, nd)
+        state = dataclasses.replace(state, rng=new_rng)
+        kappa_s = hyperD.bk - bs # (bs_size,)
+
+        def step_fn(carry, inp): # carry = state, inp = (x, noise)
+            x, noise = inp # x: (nd, ns), noise: (n_tested_patterns, nd)
+            new_carry = self.neuron.update(hyperD, carry, x)
+            return new_carry, None
+        new_state, _ = jax.lax.scan(step_fn, state, (xs, noise_arr)) # ys: (resample_every, bs_size, n_tested_patterns)
+        return new_state, jnp.zeros((self.resample_every, bs.shape[0], self.n_tested_patterns))
+    
+    def run(self, 
+            n_init_steps: int,
+            n_steps_phase1: int, # must be larger than n_tested_patterns
+            n_steps_phase2: int,
+            n_steps_phase3: int,
+            test_every_phase3: int,
+            bs: jax.Array,
+            ):
+        if self.state is None:
+            self.rng, rng1, rng2 = jax.random.split(self.rng, 3)
+            self.state = self.neuron.init_state(rng1, self.hyperD)
+            self.state = self.init_phase(rng2, self.hyperD, self.state, n_init_steps)
+
+        self.rng, rng1, rng2, rng3, rng4 = jax.random.split(self.rng, 5)
+        x0s = self.xs_generator.generate(rng1, self.n_tested_patterns) # (n_tested_patterns, nd, ns)
+        self.state, _ = self.record_phase1(rng2, self.hyperD, self.state, n_steps_phase1, bs, x0s)
+        self.state = self.no_record_phase2(rng3, self.hyperD, self.state, n_steps_phase2)
+        self.state, steady_record = self.steady_record_phase3(rng4, self.hyperD, self.state, n_steps_phase3, test_every_phase3, bs, x0s)
+
+        # exclude empty records in steady_record
+        mask = jnp.any(jnp.isclose(steady_record, -100), axis=(1, 2)) # (n_steps_phase3,)
+        steady_record = steady_record[~mask] # (n_recorded_steps, bs_size, n_tested_patterns)
+
+        self.upper99_s = np.array(self.get_upper99(steady_record)) # (bs_size,)
+
 # endregion drivers-for-Type1-neurons
 
 
