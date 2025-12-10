@@ -1008,12 +1008,28 @@ class Driver1_WeightCorr_record(Driver1_wLens_record):
             new_state = self.neuron.update(hyperD, state, x)
             w = new_state.w # (nd, ns)
             w_lens = jnp.linalg.norm(w, axis=-1) # (nd,)
-            w_A = jnp.zeros((nd, self.xs_generator.nA)) # (nd, nA)
-            w_A = w_A.at[jnp.arange(nd)[:, None], conn_mat].set(w) # (nd, nA)
-            w_A = w_A / w_lens[:, None] # (nd, nA)
-            corr_mat = w_A @ w_A.T # (nd, nd)
-            corr_mat = corr_mat.at[jnp.diag_indices_from(corr_mat)].set(0.0)
-            mean_corr = jnp.sum(corr_mat)/nd/(nd-1) # scalar
+
+            def compute_corr_between_dendrites(i, j):
+                wi = w[i, conn_mat[i, :]] / w_lens[i] # (nA, )
+                wj = w[j, conn_mat[j, :]] / w_lens[j] # (nA, )
+                return jnp.dot(wi, wj) # scalar
+            
+            def body_fun(i, val):
+                j_start = i + 1
+                def inner_body_fun(j, inner_val):
+                    corr_ij = compute_corr_between_dendrites(i, j)
+                    return inner_val + corr_ij
+                sum_corr_i = jax.lax.fori_loop(j_start, nd, inner_body_fun, 0.0)
+                return val + sum_corr_i
+            total_corr = jax.lax.fori_loop(0, nd-1, body_fun, 0.0)
+            mean_corr = (2.0 * total_corr) / (nd * (nd - 1)) # scalar
+
+            # w_A = jnp.zeros((nd, self.xs_generator.nA)) # (nd, nA)
+            # w_A = w_A.at[jnp.arange(nd)[:, None], conn_mat].set(w) # (nd, nA)
+            # w_A = w_A / w_lens[:, None] # (nd, nA)
+            # corr_mat = w_A @ w_A.T # (nd, nd)
+            # corr_mat = corr_mat.at[jnp.diag_indices_from(corr_mat)].set(0.0)
+            # mean_corr = jnp.sum(corr_mat)/nd/(nd-1) # scalar
             return new_state, jnp.array([mean_corr]) # (1, )
         def step_fn2(state, x): # carry = state
             new_state = self.neuron.update(hyperD, state, x)
