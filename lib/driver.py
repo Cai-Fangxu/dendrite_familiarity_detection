@@ -1083,6 +1083,26 @@ class Driver1_wLens_record(Driver1_bScan):
 
         self.steady_record = np.array(steady_record) # (n_recorded_steps, bs_size, n_tested_patterns)
 
+class Driver1_stepSize_record(Driver1_wLens_record):
+    def _update_record3_sparse(self, hyperD: HyperDynConfig1, state: State1, bs: None, xs: jax.Array, x0s: None, test_every: int): # bs: (bs_size,), x0s: None
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        # bs_size = bs.shape[0]
+        nd = self.neuron.hyper.nd
+        def step_fn1(state, x): # carry = state
+            new_state = self.neuron.update(hyperD, state, x)
+            w = new_state.w # (nd, ns)
+            step_sizes = jnp.linalg.norm(w-state.w, axis=-1) # (nd,)
+            return new_state, step_sizes # (nd,)
+        def step_fn2(state, x): # carry = state
+            new_state = self.neuron.update(hyperD, state, x)
+            return new_state, jnp.full((nd,), -100.) # (nd,)
+        def step_fn(carry, x): # carry = (state, idx)
+            state, idx = carry
+            new_state, y = jax.lax.cond(idx % test_every == 0, step_fn1, step_fn2, state, x)
+            return (new_state, idx+1), y
+        (new_state, _), ys = jax.lax.scan(step_fn, (state, 0), xs) # ys: (resample_every, nd)
+        return new_state, ys
+
 class Driver1_WeightCorr_record(Driver1_wLens_record):
     def _update_record3_sparse(self, hyperD: HyperDynConfig1, state: State1, bs: None, xs: jax.Array, x0s: None, test_every: int): # bs: (bs_size,), x0s: None
         """ Run simulation for `resample_every` steps and record the outputs"""
@@ -1094,27 +1114,27 @@ class Driver1_WeightCorr_record(Driver1_wLens_record):
             w = new_state.w # (nd, ns)
             w_lens = jnp.linalg.norm(w, axis=-1) # (nd,)
 
-            def compute_corr_between_dendrites(i, j):
-                wi = w[i, conn_mat[i, :]] / w_lens[i] # (nA, )
-                wj = w[j, conn_mat[j, :]] / w_lens[j] # (nA, )
-                return jnp.dot(wi, wj) # scalar
+            # def compute_corr_between_dendrites(i, j):
+            #     wi = w[i, conn_mat[i, :]] / w_lens[i] # (nA, )
+            #     wj = w[j, conn_mat[j, :]] / w_lens[j] # (nA, )
+            #     return jnp.dot(wi, wj) # scalar
             
-            def body_fun(i, val):
-                j_start = i + 1
-                def inner_body_fun(j, inner_val):
-                    corr_ij = compute_corr_between_dendrites(i, j)
-                    return inner_val + corr_ij
-                sum_corr_i = jax.lax.fori_loop(j_start, nd, inner_body_fun, 0.0)
-                return val + sum_corr_i
-            total_corr = jax.lax.fori_loop(0, nd-1, body_fun, 0.0)
-            mean_corr = (2.0 * total_corr) / (nd * (nd - 1)) # scalar
+            # def body_fun(i, val):
+            #     j_start = i + 1
+            #     def inner_body_fun(j, inner_val):
+            #         corr_ij = compute_corr_between_dendrites(i, j)
+            #         return inner_val + corr_ij
+            #     sum_corr_i = jax.lax.fori_loop(j_start, nd, inner_body_fun, 0.0)
+            #     return val + sum_corr_i
+            # total_corr = jax.lax.fori_loop(0, nd-1, body_fun, 0.0)
+            # mean_corr = (2.0 * total_corr) / (nd * (nd - 1)) # scalar
 
-            # w_A = jnp.zeros((nd, self.xs_generator.nA)) # (nd, nA)
-            # w_A = w_A.at[jnp.arange(nd)[:, None], conn_mat].set(w) # (nd, nA)
-            # w_A = w_A / w_lens[:, None] # (nd, nA)
-            # corr_mat = w_A @ w_A.T # (nd, nd)
-            # corr_mat = corr_mat.at[jnp.diag_indices_from(corr_mat)].set(0.0)
-            # mean_corr = jnp.sum(corr_mat)/nd/(nd-1) # scalar
+            w_A = jnp.zeros((nd, self.xs_generator.nA)) # (nd, nA)
+            w_A = w_A.at[jnp.arange(nd)[:, None], conn_mat].set(w) # (nd, nA)
+            w_A = w_A / w_lens[:, None] # (nd, nA)
+            corr_mat = w_A @ w_A.T # (nd, nd)
+            corr_mat = corr_mat.at[jnp.diag_indices_from(corr_mat)].set(0.0)
+            mean_corr = jnp.sum(corr_mat)/nd/(nd-1) # scalar
             return new_state, jnp.array([mean_corr]) # (1, )
         def step_fn2(state, x): # carry = state
             new_state = self.neuron.update(hyperD, state, x)
@@ -1125,6 +1145,37 @@ class Driver1_WeightCorr_record(Driver1_wLens_record):
             return (new_state, idx+1), y
         (new_state, _), ys = jax.lax.scan(step_fn, (state, 0), xs) # ys: (resample_every, 1)
         return new_state, ys
+
+class Driver1_nUpdated_record(Driver1_bScan):
+    def _update_record1(self, hyperD: HyperDynConfig1, state: State1, bs: jax.Array, xs: jax.Array, x0s: jax.Array): # bs: (bs_size,), xs: (resample_every, nd, ns), x0s: (n_tested_patterns, nd, ns)
+        """ Run simulation for `resample_every` steps and record the outputs"""
+        def step_fn(carry, x): # carry = state
+            new_carry = self.neuron.update(hyperD, carry, x)
+            w = new_carry.w # (nd, ns)
+            diffs = jnp.linalg.norm(w - carry.w, axis=-1) # (nd,)
+            n_updated = jnp.sum(diffs > 1e-6) # scalar
+            return new_carry, n_updated
+        new_state, ys = jax.lax.scan(step_fn, state, xs) # ys: (resample_every, )
+        return new_state, ys
+    
+    def run(self, 
+            n_init_steps: int,
+            n_steps_phase1: int, # must be larger than n_tested_patterns
+            n_steps_phase2: int,
+            n_steps_phase3: int,
+            test_every_phase3: int,
+            bs: jax.Array,
+            ):
+        if self.state is None:
+            self.rng, rng1, rng2 = jax.random.split(self.rng, 3)
+            self.state = self.neuron.init_state(rng1, self.hyperD)
+            self.state = self.init_phase(rng2, self.hyperD, self.state, n_init_steps)
+
+        self.rng, rng1, rng2, rng3, rng4 = jax.random.split(self.rng, 5)
+        x0s = self.xs_generator.generate(rng1, self.n_tested_patterns) # (n_tested_patterns, nd, ns)
+        self.state, transient_record = self.record_phase1(rng2, self.hyperD, self.state, n_steps_phase1, bs, x0s)
+
+        self.transient_record = np.array(transient_record).flatten() # (n_steps_phase1,)
 
 # endregion drivers-for-Type1-neurons
 

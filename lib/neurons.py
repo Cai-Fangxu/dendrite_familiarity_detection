@@ -81,8 +81,10 @@ class Neuron_Decay_NonInt(Neuron_Decay_Int):
         w = w + mask[:, None] * ( x/x_len2*(bk-(1-beta/ns)*overlaps)[:, None] - beta/ns*w ) # dim = (nd, ns)
         new_state = State1(w=w, rng=state.rng)
         return new_state
-
+    
 class Neuron_Decay_Int_Variable_n(Neuron_Decay_NonInt):
+    """select dendrites whose overlaps > bias - lambda
+    kappa is adjusted so that the neuron response is always n*kappa after learning"""
 
     def _update(self, hyperD, state, x):
         w = state.w # (nd, ns)
@@ -99,6 +101,34 @@ class Neuron_Decay_Int_Variable_n(Neuron_Decay_NonInt):
             return w_updated
         def tmp_func2():
             return w
+        w = jax.lax.cond(n_selected > 0, tmp_func1, tmp_func2)
+        new_state = State1(w=w, rng=state.rng)
+        return new_state   
+
+class Neuron_Decay_Int_Variable_n_min1(Neuron_Decay_NonInt):
+    """select dendrites whose overlaps > bias - lambda
+    kappa is adjusted so that the neuron response is always n*kappa after learning, 
+    guarantees at least one dendrite is selected, the largest one is selected if no dendrite passes the threshold bias - lambda"""
+
+    def _update(self, hyperD, state, x):
+        w = state.w # (nd, ns)
+        n, nd, ns = self.hyper.n, self.hyper.nd, self.hyper.ns
+        bk, b, beta = hyperD.bk, hyperD.b, hyperD.beta
+        bla = jnp.sqrt(2.)*jax.scipy.special.erfinv(1-2*n/nd) # bias - lambda
+        x_len2 = jnp.linalg.norm(x, axis=-1, ord=2, keepdims=True)**2
+        overlaps = jnp.sum(w*x, axis=-1) # dim = (nd, )
+        mask = jnp.heaviside(overlaps-bla, 0.) # dim = (nd, )
+        n_selected = jnp.sum(mask)
+        def tmp_func1():
+            tmp_bk = (bk - b) * n / n_selected + b
+            w_updated = w + mask[:, None] * ( x/x_len2*(tmp_bk-(1-beta/ns)*overlaps)[:, None] - beta/ns*w ) # dim = (nd, ns)
+            return w_updated
+        def tmp_func2():
+            tmp_bk = (bk-b) * n + b
+            max_idx = jnp.argmax(overlaps)
+            new_w = w[max_idx] + ( x[max_idx]/x_len2[max_idx]*(tmp_bk-(1-beta/ns)*overlaps[max_idx]) - beta/ns*w[max_idx] ) # dim = (ns, )
+            w_updated = w.at[max_idx].set(new_w)
+            return w_updated
         w = jax.lax.cond(n_selected > 0, tmp_func1, tmp_func2)
         new_state = State1(w=w, rng=state.rng)
         return new_state    
