@@ -78,3 +78,23 @@ class Sparse_Binomial(Xs_Generator):
         xs = xs1*xs2 - self.fA*self.mu
         xs = xs*self.rescale_factor
         return xs
+
+class Normal_VariableNs(Xs_Generator):
+    def __init__(self, nd: int, ns_max: int):
+        super().__init__()
+        self.nd = nd
+        self.ns_max = ns_max
+
+    def get_mask(self, ns_array: jax.Array):
+        """ns_array: shape (nd, ), each element indicates the number of synapses for that dendrite."""
+        mask = jnp.zeros((self.nd, self.ns_max))
+        for i in range(self.nd):
+            mask = mask.at[i, :ns_array[i]].set(1.0)
+        return mask # shape (nd, ns_max)
+
+    @partial(jax.jit, static_argnames=('self', 'n_patterns'))
+    def _generate(self, rng, n_patterns: int, mask: jax.Array):
+        x = jax.random.normal(rng, (n_patterns, self.nd, self.ns_max))
+        x = x * mask[None, :, :]
+        return x
+

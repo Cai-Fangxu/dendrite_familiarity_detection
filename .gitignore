@@ -4,3 +4,7 @@ tmp_data/
 data/
 tmp_figures/
 figures/
+*.pdf
+*.png
+*.svg
+*.pyc
