@@ -4,6 +4,7 @@ tmp_data/
 data/
 tmp_figures/
 figures/
+.vscode/
 *.pdf
 *.png
 *.svg
