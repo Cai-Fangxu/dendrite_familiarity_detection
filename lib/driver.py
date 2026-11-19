@@ -195,6 +195,48 @@ class Driver1_bScan:
             self.transient_record[:, :, i] = np.roll(self.transient_record[:, :, i], -i, axis=0)
         self.transient_record = self.transient_record[:n_steps_phase1-self.n_tested_patterns]
 
+class Driver1_bScan_VariableSlope(Driver1_bScan):
+    """Scan readout thresholds with fixed, heterogeneous dendritic ReLU slopes.
+
+    hyperD must provide a nonnegative slopes vector of shape (nd,). Pass a new
+    HyperDynConfig1_VariableSlope to re_init to change slopes between trials.
+    Slopes are dynamic JAX data, so changing values does not recompile phases.
+    Learning and neuron.forward retain their original, unweighted definitions.
+    """
+
+    def _readout(self, hyperD, state, bs, x0s):
+        """Compute probe overlaps once, then broadcast thresholds and slopes."""
+        if hyperD.slopes.shape != (self.neuron.hyper.nd,):
+            raise ValueError("slopes must have shape (nd,)")
+        us = jnp.sum(x0s * state.w, axis=-1) # (n_tested_patterns, nd)
+        z = jax.nn.relu(us[None, :, :] - bs[:, None, None])
+        return jnp.sum(z * hyperD.slopes[None, None, :], axis=-1)
+
+    def _update_record1(self, hyperD, state, bs, xs, x0s):
+        def step_fn(carry, x):
+            new_state = self.neuron.update(hyperD, carry, x)
+            return new_state, self._readout(hyperD, new_state, bs, x0s)
+
+        return jax.lax.scan(step_fn, state, xs)
+
+    def _update_record3_sparse(self, hyperD, state, bs, xs, x0s, test_every):
+        def record(state):
+            return self._readout(hyperD, state, bs, x0s)
+
+        def skip(state):
+            return jnp.full((bs.shape[0], x0s.shape[0]), -100., dtype=state.w.dtype)
+
+        def step_fn(carry, x):
+            state, idx = carry
+            new_state = self.neuron.update(hyperD, state, x)
+            # Keep expensive probe evaluation inside the sampled branch.
+            y = jax.lax.cond(idx % test_every == 0, record, skip, new_state)
+            return (new_state, idx + 1), y
+
+        (new_state, _), ys = jax.lax.scan(step_fn, (state, 0), xs)
+        return new_state, ys
+
+
 class Driver1_parallel_states(Driver1_bScan):
     """ Driver that can simulate multiple states in parallel. 
         The state and hyperD attributes have an extra leading dimension for the number of parallel states.

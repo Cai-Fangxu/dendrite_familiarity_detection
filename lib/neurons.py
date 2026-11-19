@@ -26,6 +26,13 @@ class HyperDynConfig1:
     beta: float # weight decay rate
 
 @dataclass
+class HyperDynConfig1_VariableSlope(HyperDynConfig1):
+    """Readout slopes, held fixed within a trial and ignored by learning."""
+
+    slopes: jax.Array # shape (nd,), shared across all scanned thresholds
+
+
+@dataclass
 class HyperDynConfig1_SynapticBound(HyperDynConfig1):
     reset_from: float # if the absolute weight exceeds this value, it is reset to reset_to
     reset_to: float # the value to which the weight is reset if it exceeds reset_from
