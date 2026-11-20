@@ -29,6 +29,15 @@ class GridKey:
     n: int
 
 
+@dataclass(frozen=True, order=True)
+class SoftmaxGridKey:
+    """Identify a Softmax grid without imposing integer winner-count semantics."""
+
+    nd: int
+    ns: int
+    beta_select: float
+
+
 @dataclass(frozen=True)
 class Settings:
     """Scan dimensions must match those used by the simulation runner."""
@@ -67,22 +76,32 @@ class Point:
     n_samples: int
 
 
-def load_grids(data_dir, settings):
+def load_grids(data_dir, settings, *, softmax=False):
     """Read direct nd*_ns*/n*.csv children and pool repeated parameter points.
 
+    softmax=True reads beta_select filenames and validates eta and the -1 sentinel.
     A file must have exactly three parameter columns followed by n_trials
     capacity columns. Malformed input raises an error instead of silently
     producing an incomplete plan.
     """
     grids = {}
-    for path in sorted(Path(data_dir).glob("nd*_ns*/n*.csv")):
+    pattern = "nd*_ns*/beta_select*.csv" if softmax else "nd*_ns*/n*.csv"
+    for path in sorted(Path(data_dir).glob(pattern)):
         geometry = re.fullmatch(r"nd(\d+)_ns(\d+)", path.parent.name)
-        winner = re.fullmatch(r"n(\d+)\.csv", path.name)
-        if geometry is None or winner is None:
-            continue
-        key = GridKey(int(geometry[1]), int(geometry[2]), int(winner[1]))
-        if min(key.nd, key.ns, key.n) < 1 or key.n > key.nd:
-            raise ValueError(f"{path}: expected nd >= n >= 1 and ns >= 1")
+        if softmax:
+            selection = re.fullmatch(r"beta_select(.+)\.csv", path.name)
+            if geometry is None or selection is None:
+                raise ValueError(f"{path}: malformed Softmax result path")
+            key = SoftmaxGridKey(int(geometry[1]), int(geometry[2]), float(selection[1]))
+            if min(key.nd, key.ns) < 1 or not math.isfinite(key.beta_select) or key.beta_select < 0:
+                raise ValueError(f"{path}: require nd, ns >= 1 and finite beta_select >= 0")
+        else:
+            winner = re.fullmatch(r"n(\d+)\.csv", path.name)
+            if geometry is None or winner is None:
+                continue
+            key = GridKey(int(geometry[1]), int(geometry[2]), int(winner[1]))
+            if min(key.nd, key.ns, key.n) < 1 or key.n > key.nd:
+                raise ValueError(f"{path}: expected nd >= n >= 1 and ns >= 1")
         if path.stat().st_size == 0:
             raise ValueError(f"{path}: empty result file")
         try:
@@ -96,6 +115,8 @@ def load_grids(data_dir, settings):
             )
         if not np.isfinite(rows).all() or (rows[:, 3:] < 0).any():
             raise ValueError(f"{path}: values must be finite; capacities must be nonnegative")
+        if softmax and ((rows[:, 1] <= 0).any() or (rows[:, 2] != -1).any()):
+            raise ValueError(f"{path}: require eta > 0 and unused decay beta = -1")
         if key in grids:
             raise ValueError(f"Multiple files resolve to the same grid: {key}")
 
@@ -124,7 +145,7 @@ def load_grids(data_dir, settings):
             )
         grids[key] = points
     if not grids:
-        raise ValueError(f"No nd{{nd}}_ns{{ns}}/n{{n}}.csv result files found under {data_dir}")
+        raise ValueError(f"No {pattern} result files found under {data_dir}")
     return grids
 
 
@@ -195,8 +216,14 @@ class Grid:
             start = position - width // 2
         return start, start + width
 
+    def valid_bk_index(self, index):
+        """Override to restrict the second grid axis without changing the edge policy."""
+        return True
+
     def proposal(self, center_index, bk_index, reason, trigger):
         """Build a complete scan, or return None if every point already exists."""
+        if not self.valid_bk_index(bk_index):
+            return None
         minimum_center = math.ceil(-self.b_origin / self.settings.b_spacing - 1e-5)
         center_index = max(center_index, minimum_center)
         half_width = self.settings.b_size // 2
@@ -229,10 +256,12 @@ def extend_bk(grid, top_points):
         for direction, edge, label in ((1, upper, "bk_upper"), (-1, lower, "bk_lower")):
             if point_bk != edge:
                 continue
-            boundary_hit = True
             counter_key = (start, end, direction)
             edge_counts[counter_key] = edge_counts.get(counter_key, 0) + 1
             next_bk = edge + direction * edge_counts[counter_key]
+            if not grid.valid_bk_index(next_bk):
+                continue
+            boundary_hit = True
             proposal = grid.proposal(start + grid.settings.b_size // 2, next_bk, label, point)
             if proposal is not None:
                 proposals.append(proposal)
@@ -266,9 +295,9 @@ def extend_b(grid, top_points):
     return ("b_center_limit" if limited else "complete"), []
 
 
-def plan_grid(points, settings):
+def plan_grid(points, settings, grid_class=Grid):
     """Apply the all-zero check, plateau policy, bk gate, and then b check."""
-    grid = Grid(points, settings)
+    grid = grid_class(points, settings)
     top_points = grid.ranked_points()[:settings.top_k]
     report = {
         "n_points": len(points),

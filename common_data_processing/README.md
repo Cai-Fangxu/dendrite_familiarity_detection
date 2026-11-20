@@ -2,6 +2,32 @@
 
 [plan_grid_search.py](plan_grid_search.py) replaces the aggregation and boundary-extension portions of `create_gridSearch_df.ipynb` and `process_gridSearch_df.ipynb`. It prepares the next simulation scans without calculating beta or running simulations. It requires NumPy and the Python standard library, with no pandas, SciPy, or JAX dependency.
 
+## Exporting maximum points only
+
+[export_grid_search_max_points.py](export_grid_search_max_points.py) exports
+maximum mean-capacity points from the old b/bk grid searches:
+
+```bash
+python common_data_processing/export_grid_search_max_points.py data/gridSearch_standard/60000/coeff_infty --output tmp_data/max_points_df.csv
+```
+
+Supply one experiment folder containing `nd{nd}_ns{ns}/n{n}.csv` results.
+Use separate folders for different rules, correlation settings, or slopes.
+Raw rows contain `b,bk,beta` followed by six trial capacities by default;
+override the count with `--n-trials`. Repeated parameter rows are pooled with
+a warning, and the script calculates mean capacity and sample SEM.
+
+The output columns match the existing planner:
+`nd,ndR,b,bk,beta,capacity,sem,ns,n_samples`, where `ndR` is n.
+Each (nd, ns, n) is handled separately, including n=1 and all-zero grids.
+At maximum mean capacity, exact ties at the same bk keep the largest b;
+ties across different bk values remain in the output. Original bk and beta
+values are preserved, and no grid spacing is required. The summary works
+with `initialize_grid_search.py` without specifying total synapses.
+
+The output parent directory is created as needed. An existing summary is
+replaced after input validation; raw result paths are protected.
+
 ## Initializing a new experiment
 
 [initialize_grid_search.py](initialize_grid_search.py) implements the notebook's separate initialization branch: choose the best existing (b, bk) for each (nd, ns, n), then center a fresh rectangular search there. It does not perform the extension planner's boundary checks and does not exclude points already sampled in the source experiment, because the destination is a new experiment.
@@ -82,3 +108,58 @@ Run the focused tests from the repository root:
 ```bash
 python -B -m unittest tests.test_plan_grid_search -v
 ```
+
+## Softmax grids
+
+Use [plan_softmax_grid_search.py](plan_softmax_grid_search.py) for b/eta grids at fixed beta_select. It preserves the standard planner behavior while enforcing positive eta, reading fractional beta_select filenames, and exporting a ready-to-run seven-column parameter table with decay beta=-1. Use --eta-reference-spacing with --calibration-report to scale spacing by each grid's target n_eff, or --eta-spacing for a common spacing in actual eta units. [calibrate_softmax.py](calibrate_softmax.py) optionally converts a target effective dendrite count into beta_select. See the [Softmax workflow](../notes/softmax.md) for commands and file schemas.
+
+For target-n batch preparation, run `python common_data_processing/calibrate_softmax.py`.
+It reads the repository's `tmp_data/tmp.csv` as `b_center, eta_reference, n, nd, ns` and writes
+`tmp_data/params_list_softmax.csv` as `nd, ns, eta, b_center, beta_select, -1, seed`,
+plus a sibling calibration report. Each distinct (nd, n) is calibrated once.
+Use a positional input path and `--output` to override paths, `--seed` for
+calibration randomness, and `--simulation-seed` for the shared runner-row seed
+(both seeds default to zero). `--nd/--n` retains single-pair JSON mode.
+
+Softmax batch preparation sets `eta = eta_reference * n`, where n is the target
+effective dendrite count. For n=2, reference spacing 0.25 becomes actual spacing
+0.5. The runner and raw result files always use actual eta; no further scaling
+is applied. Keep calibration reports for reference-spacing grid extensions.
+
+Softmax batch calibration now preserves history in `softmax_calibrations.json`
+beside the output table (override with `--registry`). Previous batch reports are
+imported before replacement. Reference-spacing planning discovers this registry
+automatically in the result directory or its parents; `--calibration-report` is
+optional and still includes its linked/sibling registry when supplied.
+
+## Exporting Softmax maximum points
+
+[export_softmax_max_points.py](export_softmax_max_points.py) writes only the
+maximum-point summary from a Softmax experiment folder:
+
+```bash
+python common_data_processing/export_softmax_max_points.py tmp_data/softmax/int/coeff_infty --output tmp_data/max_points_df.csv
+```
+
+It uses pooled mean capacities and the planner's tie policy, keeps actual eta,
+and requires no calibration registry or grid spacing. Output columns are
+`nd,ns,beta_select,b,eta,beta,capacity,sem,n_samples`. Use `--n-trials` if raw
+rows have a different number of capacity columns than the default six.
+The output is compatible with `initialize_softmax_grid_search.py`.
+
+## Initializing a Softmax experiment
+
+[initialize_softmax_grid_search.py](initialize_softmax_grid_search.py) selects the
+best existing (b, eta) per (nd, ns, beta_select) from raw Softmax results or an
+aggregated summary. It uses the calibration registry to plan five rows in
+reference-eta units by default. Preview with:
+
+```bash
+python common_data_processing/initialize_softmax_grid_search.py tmp_data/max_points_df.csv --dry-run
+```
+
+Remove --dry-run to write tmp_data/tmp.csv and its audit report. The table has
+b_center, eta_reference, n_eff, nd, ns columns. Add --params-output PATH to also
+write ready-to-run rows with actual eta, the source beta_select, and --seed
+(default 0), avoiding recalibration. See the [Softmax workflow](../notes/softmax.md)
+for spacing, positive-eta boundaries, registry discovery, and source formats.

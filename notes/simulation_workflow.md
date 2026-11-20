@@ -54,6 +54,22 @@ If no downward crossing occurs, the return value is zero. That can mean response
 
 The estimator uses order statistics rather than interpolated percentiles. Some plotting notebooks use NumPy percentile functions for visualization, which can produce slightly different displayed quantiles.
 
+## Exporting maximum points from an existing grid
+
+Use [export_grid_search_max_points.py](../common_data_processing/export_grid_search_max_points.py)
+to write only the maximum-point summary for an old b/bk grid search:
+
+```bash
+python common_data_processing/export_grid_search_max_points.py data/gridSearch_standard/60000/coeff_infty --output tmp_data/max_points_df.csv
+```
+
+The source is one experiment folder containing `nd{nd}_ns{ns}/n{n}.csv` files.
+The exporter pools repeated parameter rows, selects by mean capacity, and
+retains the planner's plateau policy. It preserves bk and beta and includes
+ns, SEM, and sample counts; n is labeled `ndR` for compatibility with existing
+summaries. No grid spacing is required. Use `--n-trials` if each raw row has
+other than six capacity columns. The output can feed `initialize_grid_search.py`.
+
 ## Starting a new grid from an existing run
 
 Use [initialize_grid_search.py](../common_data_processing/initialize_grid_search.py) to seed a new experiment, such as variable-slope simulations, around the best `(b, bk)` points of an earlier run. It selects one maximum mean-capacity point per `(nd, ns, n)` and generates a fresh grid around it. Use [plan_grid_search.py](../common_data_processing/plan_grid_search.py) afterward to extend the new experiment's grid based on its own results.
@@ -111,3 +127,7 @@ Use positive phase lengths that are multiples of `resample_every`; implementatio
 Phase-3 sampling restarts its local index at each resampling block. Choose `test_every_phase3` to divide `resample_every` if uniformly spaced sampling across the whole phase is intended. Unrecorded rows are represented internally by `-100` and removed afterward.
 
 Recordings and noise arrays can be large: before filtering, the standard 10,000-step phase-3 output with 13 thresholds and 1,000 probes has 130 million elements. A float32 version alone is about 520 MB, excluding other arrays and copies. Sparse recording reduces retained output but does not eliminate the full sentinel-filled scan output. Small pilot configurations should be checked before launching a large new sweep.
+
+## Softmax simulations
+
+For the unit-norm Softmax rules, use the [dedicated workflow](softmax.md): scan b/eta at fixed beta_select, with decay beta=-1 only in CSVs. Every repeat restarts and warms up. Dynamic connectivity and a JIT-compiled washout phase allow compiled driver reuse. The Python planner exports runnable rows directly; target-n calibration is an optional separate Python step.

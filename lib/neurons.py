@@ -341,3 +341,77 @@ class Neuron_Decay_Int_VariableNs(Neuron[HyperConfig2, State2, HyperDynConfig2])
 #         return new_state
 
 # # endregion neurontype2
+
+# Soft allocation of angular updates; beta_select is unrelated to weight decay.
+@dataclass
+class HyperConfigSoftmax:
+    """Geometry shared by the interacting and non-interacting Softmax models."""
+
+    nd: int
+    ns: int
+
+
+@dataclass
+class HyperDynConfigSoftmax:
+    """Dynamic learning parameters; b affects readout only."""
+
+    b: float
+    eta: float
+    beta_select: float
+
+
+@dataclass
+class HyperDynConfigSoftmax_Correlated(HyperDynConfigSoftmax):
+    """Fixed connectivity within a trial, replaced dynamically on restart."""
+
+    connectivity: jax.Array # shape (nd, ns), integer axon indices
+
+
+class Neuron_Softmax_Int(Neuron[HyperConfigSoftmax, State1, HyperDynConfigSoftmax]):
+    """Allocate a total angular step eta/sqrt(ns) using softmax activations."""
+
+    def __init__(self, hyperparameters: HyperConfigSoftmax):
+        if hyperparameters.nd < 1 or hyperparameters.ns < 1:
+            raise ValueError("nd and ns must be positive")
+        super().__init__(hyperparameters)
+
+    @partial(jax.jit, static_argnames=('self',))
+    def init_state(self, rng, hyperD):
+        rng_w, rng_state = jax.random.split(rng)
+        w = jax.random.normal(rng_w, (self.hyper.nd, self.hyper.ns))
+        norms = jnp.linalg.norm(w, axis=-1, keepdims=True)
+        # A zero Gaussian vector is negligible probabilistically, but avoid NaNs.
+        fallback = jnp.zeros_like(w).at[:, 0].set(1.)
+        w = jnp.where(norms > 0, w / jnp.where(norms > 0, norms, 1.), fallback)
+        return State1(w=w, rng=rng_state)
+
+    def _angles(self, hyperD, overlaps):
+        return hyperD.eta / jnp.sqrt(self.hyper.ns) * jax.nn.softmax(hyperD.beta_select * overlaps)
+
+    @partial(jax.jit, static_argnames=('self',))
+    def _update(self, hyperD, state, x):
+        w = state.w
+        overlaps = jnp.sum(w * x, axis=-1)
+        angles = self._angles(hyperD, overlaps)
+        tangent = x - overlaps[:, None] * w
+        tangent_norm = jnp.linalg.norm(tangent, axis=-1, keepdims=True)
+        # Near-parallel inputs can leave only roundoff after projection.
+        tolerance = 8 * jnp.finfo(w.dtype).eps * jnp.linalg.norm(x, axis=-1, keepdims=True)
+        valid = tangent_norm > tolerance
+        direction = tangent / jnp.where(valid, tangent_norm, 1.)
+        rotated = w * jnp.cos(angles[:, None]) + direction * jnp.sin(angles[:, None])
+        rotated = rotated / jnp.linalg.norm(rotated, axis=-1, keepdims=True)
+        return State1(w=jnp.where(valid, rotated, w), rng=state.rng)
+
+    @partial(jax.jit, static_argnames=('self',))
+    def _forward(self, hyperD, state, x):
+        overlaps = jnp.sum(state.w * x, axis=-1)
+        return jnp.sum(jax.nn.relu(overlaps - hyperD.b), axis=-1)
+
+
+class Neuron_Softmax_NonInt(Neuron_Softmax_Int):
+    """Use local exponential allocation without a cross-dendrite denominator."""
+
+    def _angles(self, hyperD, overlaps):
+        exponent = hyperD.beta_select * overlaps - 0.5 * hyperD.beta_select**2
+        return hyperD.eta / (self.hyper.nd * jnp.sqrt(self.hyper.ns)) * jnp.exp(exponent)

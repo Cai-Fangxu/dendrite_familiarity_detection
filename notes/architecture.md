@@ -78,3 +78,7 @@ The driver generates shared input using `hyperD.ns_mask[0]`, so parallel states 
 Most recall drivers directly calculate overlaps and responses instead of calling `neuron.forward`. Changing only a neuron's forward method therefore does not change recorded recall responses. The linear-control driver and the step-function runner explicitly override recording methods as well.
 
 Beyond the main drivers, `Driver1_bScan_activationScan` scans both threshold and saturation window, using `min(ReLU(u-b), window_len)`. The threshold-only recorders retain `upper99_s`. The weight-norm and step-size recorders store sampled per-dendrite values in `steady_record`. `Driver1_WeightCorr_record` embeds weights into a shared axon coordinate system and averages off-diagonal cosine similarities; it requires a correlated-input generator and `nd > 1`. `Driver1_nUpdated_record` counts weight changes above `1e-6`, not simply selected candidates; it stores counts in `transient_record` and only runs initialization and phase 1.
+
+## Softmax models
+
+[Softmax learning rules](softmax.md) use HyperConfigSoftmax, HyperDynConfigSoftmax, and the existing State1. Neuron_Softmax_Int and Neuron_Softmax_NonInt initialize and maintain unit dendritic norms and use eta and beta_select without weight decay. Driver1_bScan supplies the common protocol; DriverSoftmax_bScan_Correlated adds dynamic per-trial connectivity through the shared input-generation hook.

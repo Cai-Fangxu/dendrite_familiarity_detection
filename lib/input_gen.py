@@ -51,9 +51,11 @@ class Normal_Corr_across_Dendrites(Xs_Generator):
         return conn_mat
 
     @partial(jax.jit, static_argnames=('self', 'n_patterns'))
-    def _generate(self, rng, n_patterns: int):
+    def _generate(self, rng, n_patterns: int, connectivity=None):
+        """Use the fixed map by default, or a dynamic map supplied for this trial."""
         axon_inputs = jax.random.normal(rng, (n_patterns, self.nA))
-        return axon_inputs[:, self.conn_idx_mat]
+        indices = self.conn_idx_mat if connectivity is None else connectivity
+        return axon_inputs[:, indices]
     
 class Sparse_Binomial(Xs_Generator):
     def __init__(self, nd, ns, fA=0.1, mu=4, n_burst=4, key=jax.random.PRNGKey(0)):

@@ -43,6 +43,10 @@ class Driver1_bScan:
         self.steady_record = None
         self.upper99_s = None
 
+    def _generate_inputs(self, rng, n_patterns, hyperD):
+        """Input hook for trials with dynamically supplied connectivity."""
+        return self.xs_generator.generate(rng, n_patterns)
+
     def _update_no_record(self, hyperD: HyperDynConfig1, state: State1, xs: jax.Array): # xs: (resample_every, nd, ns)
         """ Update the state by xs without recording the outputs"""
         def step_fn(carry, x): # carry = state
@@ -93,7 +97,7 @@ class Driver1_bScan:
         n_big_steps = n_steps // self.resample_every
         rngs = jax.random.split(rng, n_big_steps)
         def step_fn(carry, rng): # carry = state
-            xs = self.xs_generator.generate(rng, self.resample_every) # (resample_every, nd, ns)
+            xs = self._generate_inputs(rng, self.resample_every, hyperD) # (resample_every, nd, ns)
             new_carry = self._update_no_record(hyperD, carry, xs)
             return new_carry, None
         new_state, _ = jax.lax.scan(step_fn, state, rngs)
@@ -112,7 +116,7 @@ class Driver1_bScan:
             state, idx = carry
 
             # generate xs
-            xs = self.xs_generator.generate(rng, self.resample_every) # (resample_every, nd, ns)
+            xs = self._generate_inputs(rng, self.resample_every, hyperD) # (resample_every, nd, ns)
             tmp_x0_padded = jax.lax.dynamic_slice(x0s_padded, (idx*self.resample_every, 0, 0), (self.resample_every, x0s.shape[1], x0s.shape[2])) # (resample_every, nd, ns)
             mask_array = ( jnp.arange(self.resample_every)+idx*self.resample_every ) < self.n_tested_patterns
             xs = jnp.where(mask_array[:, None, None], tmp_x0_padded, xs) # (resample_every, nd, ns)
@@ -123,6 +127,7 @@ class Driver1_bScan:
         (new_state, _), ys = jax.lax.scan(step_fn, (state, 0), rngs) # ys: (n_big_steps, resample_every, bs_size, n_tested_patterns)
         return new_state, ys.reshape(-1, ys.shape[-2], ys.shape[-1]) # (n_steps, bs_size, n_tested_patterns)
 
+    @partial(jax.jit, static_argnames=('self', 'n_steps'))
     def no_record_phase2(self, rng: jax.Array, hyperD: HyperDynConfig1, state: State1, n_steps: int) -> State1:
         """ Continue the simulation for `n_steps` without recording the outputs.
             `n_steps` should be a multiple of resample_every.
@@ -130,7 +135,7 @@ class Driver1_bScan:
         n_big_steps = n_steps // self.resample_every
         rngs = jax.random.split(rng, n_big_steps)
         def step_fn(carry, rng): # carry = state
-            xs = self.xs_generator.generate(rng, self.resample_every) # (resample_every, nd, ns)
+            xs = self._generate_inputs(rng, self.resample_every, hyperD) # (resample_every, nd, ns)
             new_carry = self._update_no_record(hyperD, carry, xs)
             return new_carry, None
         new_state, _ = jax.lax.scan(step_fn, state, rngs)
@@ -145,7 +150,7 @@ class Driver1_bScan:
         n_big_steps = n_steps // self.resample_every
         rngs = jax.random.split(rng, n_big_steps)
         def step_fn(carry, rng): # carry = state
-            xs = self.xs_generator.generate(rng, self.resample_every) # (resample_every, nd, ns)
+            xs = self._generate_inputs(rng, self.resample_every, hyperD) # (resample_every, nd, ns)
             new_carry, ys = self._update_record3_sparse(hyperD, carry, bs, xs, x0s, test_every)
             return new_carry, ys
         new_state, ys = jax.lax.scan(step_fn, state, rngs) # ys: (n_big_steps, resample_every, bs_size, n_tested_patterns)
@@ -176,7 +181,7 @@ class Driver1_bScan:
             self.state = self.init_phase(rng2, self.hyperD, self.state, n_init_steps)
 
         self.rng, rng1, rng2, rng3, rng4 = jax.random.split(self.rng, 5)
-        x0s = self.xs_generator.generate(rng1, self.n_tested_patterns) # (n_tested_patterns, nd, ns)
+        x0s = self._generate_inputs(rng1, self.n_tested_patterns, self.hyperD) # (n_tested_patterns, nd, ns)
         self.state, transient_record = self.record_phase1(rng2, self.hyperD, self.state, n_steps_phase1, bs, x0s)
         self.state = self.no_record_phase2(rng3, self.hyperD, self.state, n_steps_phase2)
         self.state, steady_record = self.steady_record_phase3(rng4, self.hyperD, self.state, n_steps_phase3, test_every_phase3, bs, x0s)
@@ -194,6 +199,13 @@ class Driver1_bScan:
         for i in range(self.n_tested_patterns):
             self.transient_record[:, :, i] = np.roll(self.transient_record[:, :, i], -i, axis=0)
         self.transient_record = self.transient_record[:n_steps_phase1-self.n_tested_patterns]
+
+
+class DriverSoftmax_bScan_Correlated(Driver1_bScan):
+    """Reuse the trial protocol with dynamically supplied axon connectivity."""
+
+    def _generate_inputs(self, rng, n_patterns, hyperD):
+        return self.xs_generator.generate(rng, n_patterns, hyperD.connectivity)
 
 class Driver1_bScan_VariableSlope(Driver1_bScan):
     """Scan readout thresholds with fixed, heterogeneous dendritic ReLU slopes.
