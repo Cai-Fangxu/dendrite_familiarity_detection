@@ -1,0 +1,86 @@
+{
+  "nd": 100,
+  "n": 2,
+  "output_root": "/media/fangxu/T7/dendritic_computation",
+  "dtype": "float64",
+  "rules": [
+    {
+      "name": "threshold",
+      "enabled": false,
+      "b": null,
+      "kappa": null
+    },
+    {
+      "name": "nwta",
+      "enabled": true,
+      "b": 2.6,
+      "kappa": 2.15
+    },
+    {
+      "name": "variable_target",
+      "enabled": true,
+      "b": 3.2,
+      "kappa": 2.05
+    },
+    {
+      "name": "softmax_int",
+      "enabled": false,
+      "eta": 27.5,
+      "beta_select": 1.81676
+    },
+    {
+      "name": "softmax_nonint",
+      "enabled": false,
+      "eta": null,
+      "beta_select": null
+    },
+    {
+      "name": "threshold_decay",
+      "enabled": false,
+      "b": null,
+      "kappa": null,
+      "beta_decay": null
+    },
+    {
+      "name": "nwta_decay",
+      "enabled": true,
+      "b": 2.6,
+      "kappa": 2.15,
+      "beta_decay": 8.648939
+    },
+    {
+      "name": "variable_target_decay",
+      "enabled": true,
+      "b": 3.2,
+      "kappa": 2.05,
+      "beta_decay": 10.320639
+    }
+  ],
+  "condition": "independent",
+  "stages": [
+    6000
+  ],
+  "ages": [
+    0,
+    10,
+    100,
+    300,
+    500
+  ],
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "sampling": {
+    "forks": 100000,
+    "fork_steps": 40,
+    "fork_batch_size": 32,
+    "uncertainty_groups": 20,
+    "theory_samples": 100000,
+    "theory_batch_size": 4096,
+    "theory_seed": 1729,
+    "train_chunk_steps": 256,
+    "max_pairs": 30
+  }
+}

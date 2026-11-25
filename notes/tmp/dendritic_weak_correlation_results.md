@@ -51,11 +51,11 @@ $$
 &a_r=\mathbf1\{r\in\operatorname{Top}_n(\mathbf u)\}[b+\kappa-u_r]_+,\\
 \text{Variable target:}\quad
 &a_r=\mathbf1\{r\in\mathcal S(\mathbf u)\}
-\left[b+\frac{n\kappa}{\hat n}-u_r\right]_+.
+\left[b+\frac{n\kappa}{\hat n}-u_r\right].
 \end{aligned} \tag{R2}
 $$
 
-Here $b$ is the dendritic output threshold, $\lambda$ is the eligibility margin, $\kappa$ the original target activation margin, $n$ the nominal number of winners, $\hat n=|\mathcal S|$, $[y]_+=\max(y,0)$, and $\mathcal S$ is the above-eligibility-threshold set, with the largest-activation dendrite selected if that set is empty. Ties may be broken in a permutation-symmetric way. These are large-$N_s$ equivalents of the target updates, not identities at finite $N_s$; the original target-based rules **do not generally have a constant sum of learning amplitudes**.
+Here $b$ is the dendritic output threshold, $\lambda$ is the eligibility margin, $\kappa$ the original target activation margin, $n$ the nominal number of winners, $\hat n=|\mathcal S|$, $[y]_+=\max(y,0)$, and $\mathcal S$ is the above-eligibility-threshold set, with the largest-activation dendrite selected if that set is empty. The variable-target amplitude is **signed**, matching the existing implementation: selected branches above their adjusted target may move downward. The fixed-target rules retain their upper-target gate. Ties may be broken in a permutation-symmetric way. These are large-$N_s$ equivalents of the target updates, not identities at finite $N_s$; the original target-based rules **do not generally have a constant sum of learning amplitudes**.
 
 ## 2. Universal uncorrelated-input forgetting law
 
